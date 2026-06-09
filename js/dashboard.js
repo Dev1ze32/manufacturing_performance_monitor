@@ -234,45 +234,89 @@ function renderProduction(c, month) {
   const filter = month ? `WHERE month = '${month}'` : '';
   const rows = query(`SELECT month, line, capacity, actual_output FROM capacity ${filter} ORDER BY month DESC, line`);
   const mLabel = month ? fmtMonthLabel(month) : 'All Months';
- 
-  // aggregate by month for trend
+
+  // Aggregate by month for the trend chart
   const byMonth = {};
   rows.forEach(r => {
-    if (!byMonth[r.month]) byMonth[r.month] = {cap:0, act:0};
-    byMonth[r.month].cap += r.capacity||0;
-    byMonth[r.month].act += r.actual_output||0;
+    if (!byMonth[r.month]) byMonth[r.month] = { cap: 0, act: 0 };
+    byMonth[r.month].cap += r.capacity || 0;
+    byMonth[r.month].act += r.actual_output || 0;
   });
-  const months = Object.keys(byMonth).sort();
-  const trendEff = months.map(m => byMonth[m].cap > 0 ? byMonth[m].act/byMonth[m].cap*100 : null);
- 
+  const trendMonths = Object.keys(byMonth).sort();
+  const trendEff = trendMonths.map(m => byMonth[m].cap > 0 ? byMonth[m].act / byMonth[m].cap * 100 : null);
+
+  // Get all lines for the selected month (or all months) that have weekly data
+  const weeklyFilter = month ? `WHERE month = '${month}'` : '';
+  const weeklyLines = query(`SELECT DISTINCT line FROM capacity_weekly ${weeklyFilter} ORDER BY line`);
+  const hasWeekly = weeklyLines.length > 0;
+
+  // Build per-line summary cards for selected period
+  const lineRows = month
+    ? query(`SELECT line, SUM(capacity) as cap, SUM(actual_output) as act FROM capacity WHERE month=? GROUP BY line ORDER BY line`, [month])
+    : query(`SELECT line, SUM(capacity) as cap, SUM(actual_output) as act FROM capacity GROUP BY line ORDER BY line`);
+
   c.innerHTML = `
     <div class="page-header">
       <h1>Production Dashboard</h1>
       <p>Capacity, output, and efficiency by line — ${mLabel}</p>
     </div>
+
+    ${lineRows.length ? `
+    <div class="section-gap">
+      <div class="card-title" style="margin-bottom:12px;color:var(--gray-500)">LINE SUMMARY — ${mLabel}</div>
+      <div class="metrics-grid">
+        ${lineRows.map(r => {
+          const eff = r.cap > 0 ? r.act / r.cap : null;
+          const pct = eff !== null ? (eff * 100).toFixed(2) + '%' : '—';
+          const color = eff === null ? 'var(--gray-400)' : eff >= 0.95 ? 'var(--green)' : eff >= 0.85 ? 'var(--amber)' : 'var(--red)';
+          return `<div class="metric-card" style="border-left:3px solid ${color}">
+            <div class="metric-label">${r.line}</div>
+            <div class="metric-value" style="color:${color};font-size:22px">${pct}</div>
+            <div class="metric-sub">${fmtN(r.act, 0)} / ${fmtN(r.cap, 0)} units</div>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>` : ''}
+
     <div class="card section-gap">
-      <div class="card-title" style="margin-bottom:14px">Efficiency Trend (%)</div>
+      <div class="card-title" style="margin-bottom:14px">Overall Efficiency Trend (%)</div>
       <div class="chart-container">
         <canvas id="prodTrendChart" aria-label="Efficiency trend">Efficiency trend</canvas>
       </div>
     </div>
+
+    ${hasWeekly ? `
+    <div class="section-gap">
+      <div class="card-title" style="margin-bottom:12px;color:var(--gray-500)">WEEKLY BREAKDOWN BY LINE</div>
+      <div class="info-block" style="margin-bottom:16px">
+        <strong>Weekly view:</strong> Each line's week-by-week capacity vs actual output. 
+        Efficiency &lt; 85% is flagged red; &gt; 100% means actual exceeded planned capacity.
+      </div>
+      <div id="weekly-line-tabs" class="tabs" style="margin-bottom:0">
+        ${weeklyLines.map((r, i) => `<button class="tab ${i === 0 ? 'active' : ''}" onclick="switchWeeklyTab('${r.line}', this)">${r.line}</button>`).join('')}
+      </div>
+      <div id="weekly-panels">
+        ${weeklyLines.map((r, i) => renderWeeklyPanel(r.line, month, i === 0)).join('')}
+      </div>
+    </div>` : ''}
+
     <div class="card">
-      <div class="card-title" style="margin-bottom:14px">Efficiency by Production Line</div>
+      <div class="card-title" style="margin-bottom:14px">Monthly Efficiency by Line</div>
       <div class="table-wrap">
         <table>
           <thead><tr><th>Month</th><th>Line</th><th>Capacity (units)</th><th>Actual Output (units)</th><th>Efficiency %</th><th>Status</th></tr></thead>
           <tbody>
             ${rows.length ? rows.map(r => {
               const eff = calcEfficiency(r.capacity, r.actual_output);
-              const pct = eff !== null ? (eff*100).toFixed(2)+'%' : '—';
-              const statusClass = eff===null?'gray':eff>=0.95?'green':eff>=0.85?'amber':'red';
+              const pct = eff !== null ? (eff * 100).toFixed(2) + '%' : '—';
+              const statusClass = eff === null ? 'gray' : eff >= 0.95 ? 'green' : eff >= 0.85 ? 'amber' : 'red';
               return `<tr>
                 <td>${fmtMonthLabel(r.month)}</td>
                 <td><strong>${r.line}</strong></td>
-                <td class="td-number">${fmtN(r.capacity,0)}</td>
-                <td class="td-number">${fmtN(r.actual_output,0)}</td>
+                <td class="td-number">${fmtN(r.capacity, 0)}</td>
+                <td class="td-number">${fmtN(r.actual_output, 0)}</td>
                 <td class="td-number"><strong>${pct}</strong></td>
-                <td><span class="pill pill-${statusClass}">${eff===null?'N/A':eff>=0.95?'On Target':eff>=0.85?'Watch':'Below Target'}</span></td>
+                <td><span class="pill pill-${statusClass}">${eff === null ? 'N/A' : eff >= 0.95 ? 'On Target' : eff >= 0.85 ? 'Watch' : 'Below Target'}</span></td>
               </tr>`;
             }).join('') : '<tr><td colspan="6"><div class="empty"><p>No capacity data. Use Capacity & Efficiency entry.</p></div></td></tr>'}
           </tbody>
@@ -280,30 +324,163 @@ function renderProduction(c, month) {
       </div>
     </div>
   `;
- 
+
+  // Trend chart
   destroyChart('prodTrend');
   const ctx = document.getElementById('prodTrendChart');
-  if (ctx && months.length) {
+  if (ctx && trendMonths.length) {
     charts['prodTrend'] = new Chart(ctx, {
       type: 'line',
       data: {
-        labels: months.map(fmtMonthLabel),
+        labels: trendMonths.map(fmtMonthLabel),
         datasets: [
-          { label: 'Efficiency %', data: trendEff, borderColor:'#15803d', backgroundColor:'rgba(21,128,61,0.08)', fill:true, tension:0.3, pointRadius:4 },
-          { label: 'Target (95%)', data: months.map(()=>95), borderColor:'#dc2626', borderDash:[6,3], pointRadius:0, borderWidth:1.5 }
+          { label: 'Efficiency %', data: trendEff, borderColor: '#15803d', backgroundColor: 'rgba(21,128,61,0.08)', fill: true, tension: 0.3, pointRadius: 4 },
+          { label: 'Target (95%)', data: trendMonths.map(() => 95), borderColor: '#dc2626', borderDash: [6, 3], pointRadius: 0, borderWidth: 1.5 }
         ]
       },
       options: {
-        responsive:true, maintainAspectRatio:false,
-        plugins:{legend:{labels:{font:{size:11},boxWidth:10}}},
-        scales:{
-          y:{min:50,max:110,grid:{color:'#f1f5f9'},ticks:{font:{size:11},callback:v=>v+'%'}},
-          x:{grid:{display:false},ticks:{font:{size:11},maxRotation:45,autoSkip:false}}
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { labels: { font: { size: 11 }, boxWidth: 10 } } },
+        scales: {
+          y: { min: 50, max: 115, grid: { color: '#f1f5f9' }, ticks: { font: { size: 11 }, callback: v => v + '%' } },
+          x: { grid: { display: false }, ticks: { font: { size: 11 }, maxRotation: 45, autoSkip: false } }
         }
       }
     });
   }
+
+  // Draw charts for the first line's weekly panel
+  if (hasWeekly) {
+    const firstLine = weeklyLines[0].line;
+    drawWeeklyCharts(firstLine, month);
+  }
 }
+
+function renderWeeklyPanel(line, month, visible) {
+  const monthFilter = month ? `AND month = '${month}'` : '';
+  const weeks = query(
+    `SELECT week_label, week_num, SUM(capacity) as cap, SUM(actual_output) as act, month
+     FROM capacity_weekly
+     WHERE line = ? ${monthFilter}
+     GROUP BY month, week_label, week_num
+     ORDER BY month ASC, week_num ASC, week_label ASC`,
+    [line]
+  );
+
+  const panelId = 'weekly-panel-' + line.replace(/\s+/g, '-');
+  const chartId = 'weekly-chart-' + line.replace(/\s+/g, '-');
+
+  if (!weeks.length) {
+    return `<div id="${panelId}" class="weekly-panel card" style="${visible ? '' : 'display:none'}">
+      <div class="empty"><p>No weekly data for ${line}.</p></div>
+    </div>`;
+  }
+
+  const rows = weeks.map(w => {
+    const eff = w.cap > 0 ? w.act / w.cap : null;
+    const pct = eff !== null ? (eff * 100).toFixed(2) + '%' : '—';
+    const cls = eff === null ? '' : eff > 1.0 ? 'td-green' : eff >= 0.85 ? '' : 'td-red';
+    return `<tr>
+      <td>${fmtMonthLabel(w.month)}</td>
+      <td><strong>${w.week_label}</strong></td>
+      <td class="td-number">${fmtN(w.cap, 0)}</td>
+      <td class="td-number">${fmtN(w.act, 0)}</td>
+      <td class="td-number"><strong class="${cls}">${pct}</strong></td>
+      <td><span class="pill pill-${eff === null ? 'gray' : eff > 1.0 ? 'blue' : eff >= 0.95 ? 'green' : eff >= 0.85 ? 'amber' : 'red'}">${eff === null ? 'N/A' : eff > 1.0 ? 'Exceeded' : eff >= 0.95 ? 'On Target' : eff >= 0.85 ? 'Watch' : 'Below'}</span></td>
+    </tr>`;
+  }).join('');
+
+  return `
+    <div id="${panelId}" class="weekly-panel card" style="${visible ? '' : 'display:none'}">
+      <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px">
+        <div style="flex:1;min-width:280px">
+          <div class="card-title" style="margin-bottom:10px">${line} — Weekly Capacity vs Actual</div>
+          <div class="chart-container" style="height:220px">
+            <canvas id="${chartId}" aria-label="${line} weekly chart">${line} weekly data</canvas>
+          </div>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Month</th><th>Week</th><th>Capacity</th><th>Actual</th><th>Efficiency</th><th>Status</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+function drawWeeklyCharts(line, month) {
+  const monthFilter = month ? `AND month = '${month}'` : '';
+  const weeks = query(
+    `SELECT week_label, week_num, SUM(capacity) as cap, SUM(actual_output) as act, month
+     FROM capacity_weekly
+     WHERE line = ? ${monthFilter}
+     GROUP BY month, week_label, week_num
+     ORDER BY month ASC, week_num ASC, week_label ASC`,
+    [line]
+  );
+  if (!weeks.length) return;
+
+  const chartId = 'weekly-chart-' + line.replace(/\s+/g, '-');
+  const chartKey = 'weekly-' + line;
+  destroyChart(chartKey);
+  const ctx = document.getElementById(chartId);
+  if (!ctx) return;
+
+  const labels = weeks.map(w => w.week_label);
+  const capData = weeks.map(w => w.cap);
+  const actData = weeks.map(w => w.act);
+  const effData = weeks.map(w => w.cap > 0 ? +(w.act / w.cap * 100).toFixed(2) : null);
+
+  charts[chartKey] = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        { label: 'Capacity', data: capData, backgroundColor: 'rgba(59,130,246,0.25)', borderColor: '#3b82f6', borderWidth: 1.5, borderRadius: 3, order: 2 },
+        { label: 'Actual', data: actData, backgroundColor: 'rgba(21,128,61,0.6)', borderColor: '#15803d', borderWidth: 1.5, borderRadius: 3, order: 2 },
+        { type: 'line', label: 'Eff %', data: effData, borderColor: '#7c3aed', borderWidth: 2, pointRadius: 4, pointBackgroundColor: '#7c3aed', fill: false, tension: 0.3, yAxisID: 'y2', order: 1 }
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { labels: { font: { size: 11 }, boxWidth: 10 } },
+        tooltip: {
+          callbacks: {
+            label: ctx => {
+              if (ctx.dataset.label === 'Eff %') return ` Efficiency: ${ctx.parsed.y?.toFixed(2)}%`;
+              return ` ${ctx.dataset.label}: ${Number(ctx.parsed.y).toLocaleString('en-PH', { maximumFractionDigits: 0 })}`;
+            }
+          }
+        }
+      },
+      scales: {
+        y: { grid: { color: '#f1f5f9' }, ticks: { font: { size: 10 } }, title: { display: true, text: 'Units', font: { size: 10 } } },
+        y2: { position: 'right', min: 0, max: 130, grid: { display: false }, ticks: { font: { size: 10 }, callback: v => v + '%' }, title: { display: true, text: 'Eff %', font: { size: 10 } } },
+        x: { grid: { display: false }, ticks: { font: { size: 10 }, maxRotation: 40 } }
+      }
+    }
+  });
+}
+
+// Called by tab buttons
+window.switchWeeklyTab = function(line, btn) {
+  // Toggle tab active state
+  btn.closest('.tabs').querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+
+  // Show/hide panels
+  document.querySelectorAll('.weekly-panel').forEach(p => p.style.display = 'none');
+  const panelId = 'weekly-panel-' + line.replace(/\s+/g, '-');
+  const panel = document.getElementById(panelId);
+  if (panel) panel.style.display = '';
+
+  // Draw chart for this line (lazy init — only draw once panel is visible)
+  const month = document.getElementById('globalMonth')?.value || '';
+  drawWeeklyCharts(line, month);
+};
  
 // ── MANHOURS DASHBOARD ─────────────────────────────────────────────────────────
 function renderManhours(c, month) {

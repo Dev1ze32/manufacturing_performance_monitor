@@ -143,93 +143,242 @@ function editProd(m,v){document.getElementById('p_month').value=m;document.getEl
 // ── ENTRY: CAPACITY ────────────────────────────────────────────────────────────
 function renderEntryCapacity(c) {
   const rows = query('SELECT * FROM capacity ORDER BY month DESC, line LIMIT 60');
+  const weekRows = query('SELECT * FROM capacity_weekly ORDER BY month DESC, line, week_num ASC, week_label ASC LIMIT 200');
+
+  // Collect existing lines for the dropdown helper
+  const existingLines = [...new Set(rows.map(r => r.line))].sort();
+
   c.innerHTML = `
     <div class="page-header">
       <h1>Capacity & Efficiency Entry</h1>
-      <p>Enter production line capacity and actual output per month</p>
+      <p>Enter monthly totals and optional weekly breakdown per production line</p>
     </div>
-    <div class="card section-gap">
-      <div class="info-block"><strong>Formula:</strong> Efficiency = Actual Output ÷ Capacity × 100%</div>
-      <div class="form-section">
-        <div class="form-section-title">Add / Update Record</div>
-        <div class="form-grid">
-          <div class="form-group">
-            <label>Month *</label>
-            <select id="c_month"><option value="">Select month...</option>${monthOptions()}</select>
+
+    <div class="tabs" id="cap-tabs">
+      <button class="tab active" onclick="switchCapTab('monthly', this)">Monthly Totals</button>
+      <button class="tab" onclick="switchCapTab('weekly', this)">Weekly Breakdown</button>
+    </div>
+
+    <!-- ── MONTHLY ── -->
+    <div id="cap-panel-monthly">
+      <div class="card section-gap">
+        <div class="info-block"><strong>Formula:</strong> Efficiency = Actual Output ÷ Capacity × 100%</div>
+        <div class="form-section">
+          <div class="form-section-title">Add / Update Monthly Record</div>
+          <div class="form-grid">
+            <div class="form-group">
+              <label>Month *</label>
+              <select id="c_month"><option value="">Select month...</option>${monthOptions()}</select>
+            </div>
+            <div class="form-group">
+              <label>Production Line *</label>
+              <input type="text" id="c_line" placeholder="e.g. Line 4 ES" list="c_line_list">
+              <datalist id="c_line_list">${existingLines.map(l => `<option value="${l}">`).join('')}</datalist>
+              <span class="form-hint">Line name must be consistent (e.g. Line 4 ES, Line 6 Epoxy, Line 4 BB)</span>
+            </div>
+            <div class="form-group">
+              <label>Capacity (units) *</label>
+              <input type="number" id="c_cap" placeholder="e.g. 138046" step="0.001" oninput="previewEff()">
+            </div>
+            <div class="form-group">
+              <label>Actual Output (units) *</label>
+              <input type="number" id="c_act" placeholder="e.g. 132313" step="0.001" oninput="previewEff()">
+            </div>
           </div>
-          <div class="form-group">
-            <label>Production Line *</label>
-            <input type="text" id="c_line" placeholder="e.g. Line 4 ES">
-            <span class="form-hint">Exact line name as in Excel (e.g. Line 4 ES, Line 6 Epoxy, Line 4 BB)</span>
-          </div>
-          <div class="form-group">
-            <label>Capacity (units) *</label>
-            <input type="number" id="c_cap" placeholder="e.g. 138046" step="0.001">
-          </div>
-          <div class="form-group">
-            <label>Actual Output (units) *</label>
-            <input type="number" id="c_act" placeholder="e.g. 132313" step="0.001">
+          <div id="c_preview" style="margin-top:12px;font-size:13px;color:var(--gray-500)"></div>
+          <div style="margin-top:16px;display:flex;gap:10px">
+            <button class="btn btn-primary" onclick="saveCapacity()">Save Monthly Record</button>
+            <button class="btn btn-secondary" onclick="clearForm(['c_month','c_line','c_cap','c_act'])">Clear</button>
           </div>
         </div>
-        <div id="c_preview" style="margin-top:12px;font-size:13px;color:var(--gray-500)"></div>
-        <div style="margin-top:16px;display:flex;gap:10px">
-          <button class="btn btn-primary" onclick="saveCapacity()">Save Record</button>
-          <button class="btn btn-secondary" onclick="clearForm(['c_month','c_line','c_cap','c_act'])">Clear</button>
+      </div>
+      <div class="card">
+        <div class="records-header">
+          <div class="card-title">Monthly Records</div>
+          ${rows.length ? `<button class="btn btn-sm btn-danger" onclick="clearExistingRecords('capacity','Capacity records')">Clear Records</button>` : ''}
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Month</th><th>Line</th><th>Capacity</th><th>Actual Output</th><th>Efficiency</th><th>Actions</th></tr></thead>
+            <tbody>
+              ${rows.length ? rows.map(r => {
+                const eff = calcEfficiency(r.capacity, r.actual_output);
+                return `<tr>
+                  <td>${fmtMonthLabel(r.month)}</td><td><strong>${r.line}</strong></td>
+                  <td class="td-number">${fmtN(r.capacity, 0)}</td>
+                  <td class="td-number">${fmtN(r.actual_output, 0)}</td>
+                  <td class="td-number"><strong>${eff !== null ? (eff * 100).toFixed(2) + '%' : '—'}</strong></td>
+                  <td><div class="record-actions">
+                    <button class="btn btn-sm btn-secondary" onclick="editCap('${r.month}','${r.line}',${r.capacity},${r.actual_output})">Edit</button>
+                    <button class="btn btn-sm btn-danger" onclick="deleteCapacity('${r.month}','${r.line}')">Delete</button>
+                  </div></td>
+                </tr>`;
+              }).join('') : '<tr><td colspan="6"><div class="empty"><p>No records yet.</p></div></td></tr>'}
+            </tbody>
+          </table>
         </div>
       </div>
     </div>
-    <div class="card">
-      <div class="records-header">
-        <div class="card-title">Existing Records</div>
-        ${rows.length ? `<button class="btn btn-sm btn-danger" onclick="clearExistingRecords('capacity','Capacity records')">Clear Records</button>` : ''}
+
+    <!-- ── WEEKLY ── -->
+    <div id="cap-panel-weekly" style="display:none">
+      <div class="card section-gap">
+        <div class="info-block">
+          <strong>Weekly entry:</strong> Enter individual week rows that roll up into the monthly total.
+          Week label format should match: <code>APR WEEK 14</code>, <code>MAY WK18</code>, etc.
+        </div>
+        <div class="form-section">
+          <div class="form-section-title">Add / Update Weekly Record</div>
+          <div class="form-grid">
+            <div class="form-group">
+              <label>Month *</label>
+              <select id="cw_month"><option value="">Select month...</option>${monthOptions()}</select>
+            </div>
+            <div class="form-group">
+              <label>Production Line *</label>
+              <input type="text" id="cw_line" placeholder="e.g. Line 4 ES" list="cw_line_list">
+              <datalist id="cw_line_list">${existingLines.map(l => `<option value="${l}">`).join('')}</datalist>
+            </div>
+            <div class="form-group">
+              <label>Week Label *</label>
+              <input type="text" id="cw_wlabel" placeholder="e.g. APR WEEK 15">
+              <span class="form-hint">Use consistent format: [MON] WEEK [N] or [MON] WK[N]</span>
+            </div>
+            <div class="form-group">
+              <label>Week Number</label>
+              <input type="number" id="cw_wnum" placeholder="e.g. 15" min="1" max="53">
+              <span class="form-hint">Calendar week number (used for sort order)</span>
+            </div>
+            <div class="form-group">
+              <label>Capacity (units) *</label>
+              <input type="number" id="cw_cap" placeholder="e.g. 26467" step="0.001" oninput="previewWeekEff()">
+            </div>
+            <div class="form-group">
+              <label>Actual Output (units) *</label>
+              <input type="number" id="cw_act" placeholder="e.g. 24556" step="0.001" oninput="previewWeekEff()">
+            </div>
+          </div>
+          <div id="cw_preview" style="margin-top:12px;font-size:13px;color:var(--gray-500)"></div>
+          <div style="margin-top:16px;display:flex;gap:10px">
+            <button class="btn btn-primary" onclick="saveWeeklyCapacity()">Save Weekly Record</button>
+            <button class="btn btn-secondary" onclick="clearForm(['cw_month','cw_line','cw_wlabel','cw_wnum','cw_cap','cw_act'])">Clear</button>
+          </div>
+        </div>
       </div>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Month</th><th>Line</th><th>Capacity</th><th>Actual Output</th><th>Efficiency</th><th>Actions</th></tr></thead>
-          <tbody>
-            ${rows.length ? rows.map(r=>{
-              const eff=calcEfficiency(r.capacity,r.actual_output);
-              return `<tr>
-                <td>${fmtMonthLabel(r.month)}</td><td><strong>${r.line}</strong></td>
-                <td class="td-number">${fmtN(r.capacity,0)}</td>
-                <td class="td-number">${fmtN(r.actual_output,0)}</td>
-                <td class="td-number"><strong>${eff!==null?(eff*100).toFixed(2)+'%':'—'}</strong></td>
-                <td><div class="record-actions">
-                  <button class="btn btn-sm btn-secondary" onclick="editCap('${r.month}','${r.line}',${r.capacity},${r.actual_output})">Edit</button>
-                  <button class="btn btn-sm btn-danger" onclick="deleteCapacity('${r.month}','${r.line}')">Delete</button>
-                </div></td>
-              </tr>`;
-            }).join('') : '<tr><td colspan="6"><div class="empty"><p>No records yet.</p></div></td></tr>'}
-          </tbody>
-        </table>
+      <div class="card">
+        <div class="records-header">
+          <div class="card-title">Weekly Records</div>
+          ${weekRows.length ? `<button class="btn btn-sm btn-danger" onclick="clearWeeklyRecords()">Clear All Weekly</button>` : ''}
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Month</th><th>Line</th><th>Week</th><th>Capacity</th><th>Actual</th><th>Efficiency</th><th>Actions</th></tr></thead>
+            <tbody>
+              ${weekRows.length ? weekRows.map(r => {
+                const eff = calcEfficiency(r.capacity, r.actual_output);
+                return `<tr>
+                  <td>${fmtMonthLabel(r.month)}</td>
+                  <td><strong>${r.line}</strong></td>
+                  <td>${r.week_label}</td>
+                  <td class="td-number">${fmtN(r.capacity, 0)}</td>
+                  <td class="td-number">${fmtN(r.actual_output, 0)}</td>
+                  <td class="td-number"><strong>${eff !== null ? (eff * 100).toFixed(2) + '%' : '—'}</strong></td>
+                  <td><div class="record-actions">
+                    <button class="btn btn-sm btn-secondary" onclick="editWeeklyCap(${r.id})">Edit</button>
+                    <button class="btn btn-sm btn-danger" onclick="deleteWeeklyCapacity(${r.id})">Delete</button>
+                  </div></td>
+                </tr>`;
+              }).join('') : '<tr><td colspan="7"><div class="empty"><p>No weekly records yet. Import from Excel or enter manually.</p></div></td></tr>'}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   `;
-  document.getElementById('c_cap').addEventListener('input',previewEff);
-  document.getElementById('c_act').addEventListener('input',previewEff);
 }
-function previewEff(){
-  const cap=parseFloat(document.getElementById('c_cap').value), act=parseFloat(document.getElementById('c_act').value);
-  const prev=document.getElementById('c_preview');
-  if(!isNaN(cap)&&!isNaN(act)&&cap>0) prev.innerHTML=`Preview: Efficiency = <strong>${(act/cap*100).toFixed(2)}%</strong>`;
-  else prev.innerHTML='';
+
+window.switchCapTab = function(tab, btn) {
+  btn.closest('.tabs').querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById('cap-panel-monthly').style.display = tab === 'monthly' ? '' : 'none';
+  document.getElementById('cap-panel-weekly').style.display  = tab === 'weekly'  ? '' : 'none';
+};
+
+function previewEff() {
+  const cap = parseFloat(document.getElementById('c_cap').value);
+  const act = parseFloat(document.getElementById('c_act').value);
+  const prev = document.getElementById('c_preview');
+  if (!isNaN(cap) && !isNaN(act) && cap > 0)
+    prev.innerHTML = `Preview: Efficiency = <strong>${(act / cap * 100).toFixed(2)}%</strong>`;
+  else prev.innerHTML = '';
 }
-function saveCapacity(){
-  const month=val('c_month'),line=val('c_line').trim(),cap=parseFloat(val('c_cap')),act=parseFloat(val('c_act'));
-  if(!month||!line||isNaN(cap)||isNaN(act)){showToast('All fields are required','error');return;}
+function previewWeekEff() {
+  const cap = parseFloat(document.getElementById('cw_cap').value);
+  const act = parseFloat(document.getElementById('cw_act').value);
+  const prev = document.getElementById('cw_preview');
+  if (!isNaN(cap) && !isNaN(act) && cap > 0)
+    prev.innerHTML = `Preview: Efficiency = <strong>${(act / cap * 100).toFixed(2)}%</strong>`;
+  else prev.innerHTML = '';
+}
+
+function saveCapacity() {
+  const month = val('c_month'), line = val('c_line').trim(), cap = parseFloat(val('c_cap')), act = parseFloat(val('c_act'));
+  if (!month || !line || isNaN(cap) || isNaN(act)) { showToast('All fields are required', 'error'); return; }
   run(`INSERT INTO capacity (month,line,capacity,actual_output) VALUES (?,?,?,?)
     ON CONFLICT(month,line) DO UPDATE SET capacity=excluded.capacity, actual_output=excluded.actual_output`,
-    [month,line,cap,act]);
-  showToast('Capacity record saved!');navigateTo('entry-capacity');
+    [month, line, cap, act]);
+  showToast('Monthly record saved!'); navigateTo('entry-capacity');
 }
-function editCap(m,l,c,a){
-  document.getElementById('c_month').value=m;document.getElementById('c_line').value=l;
-  document.getElementById('c_cap').value=c;document.getElementById('c_act').value=a;
+
+function saveWeeklyCapacity() {
+  const month  = val('cw_month');
+  const line   = val('cw_line').trim();
+  const wlabel = val('cw_wlabel').trim().toUpperCase();
+  const wnum   = parseInt(val('cw_wnum')) || null;
+  const cap    = parseFloat(val('cw_cap'));
+  const act    = parseFloat(val('cw_act'));
+  if (!month || !line || !wlabel || isNaN(cap) || isNaN(act)) { showToast('Month, line, week label, capacity, and actual are required', 'error'); return; }
+  run(`INSERT INTO capacity_weekly (month,line,week_label,week_num,capacity,actual_output) VALUES (?,?,?,?,?,?)
+    ON CONFLICT(month,line,week_label) DO UPDATE SET week_num=excluded.week_num, capacity=excluded.capacity, actual_output=excluded.actual_output`,
+    [month, line, wlabel, wnum, cap, act]);
+  showToast('Weekly record saved!'); navigateTo('entry-capacity');
 }
-function deleteCapacity(month,line){
-  if(!confirm(`Delete capacity record for ${line} in ${fmtMonthLabel(month)}?`)) return;
-  run(`DELETE FROM capacity WHERE month=? AND line=?`,[month,line]);
-  showToast('Deleted.','error');navigateTo('entry-capacity');
+
+function editCap(m, l, c, a) {
+  document.getElementById('c_month').value = m;
+  document.getElementById('c_line').value  = l;
+  document.getElementById('c_cap').value   = c;
+  document.getElementById('c_act').value   = a;
+}
+
+function editWeeklyCap(id) {
+  const r = query(`SELECT * FROM capacity_weekly WHERE id=?`, [id])[0];
+  if (!r) return;
+  // Switch to weekly tab
+  document.getElementById('cap-panel-monthly').style.display = 'none';
+  document.getElementById('cap-panel-weekly').style.display  = '';
+  document.querySelectorAll('#cap-tabs .tab').forEach((t, i) => t.classList.toggle('active', i === 1));
+  setVal('cw_month', r.month); setVal('cw_line', r.line);
+  setVal('cw_wlabel', r.week_label); setVal('cw_wnum', r.week_num);
+  setVal('cw_cap', r.capacity); setVal('cw_act', r.actual_output);
+}
+
+function deleteCapacity(month, line) {
+  if (!confirm(`Delete monthly capacity record for ${line} in ${fmtMonthLabel(month)}?`)) return;
+  run(`DELETE FROM capacity WHERE month=? AND line=?`, [month, line]);
+  showToast('Deleted.', 'error'); navigateTo('entry-capacity');
+}
+
+function deleteWeeklyCapacity(id) {
+  if (!confirm('Delete this weekly record?')) return;
+  run(`DELETE FROM capacity_weekly WHERE id=?`, [id]);
+  showToast('Deleted.', 'error'); navigateTo('entry-capacity');
+}
+
+function clearWeeklyRecords() {
+  if (!confirm('Clear ALL weekly capacity records?')) return;
+  run(`DELETE FROM capacity_weekly`);
+  showToast('Weekly records cleared.', 'error'); navigateTo('entry-capacity');
 }
  
 // ── ENTRY: MANHOURS ────────────────────────────────────────────────────────────
@@ -503,7 +652,9 @@ function editBudget(m,ub,rb,vb){
 export {
   renderEntryUtilities, saveUtility, editUtility,
   renderEntryProduction, saveProduction, editProd,
-  renderEntryCapacity, saveCapacity, editCap, deleteCapacity, previewEff,
+  renderEntryCapacity, saveCapacity, editCap, deleteCapacity,
+  saveWeeklyCapacity, editWeeklyCap, deleteWeeklyCapacity, clearWeeklyRecords,
+  previewEff, previewWeekEff,
   renderEntryManhours, saveManhours, editMH, deleteMH,
   renderEntryLoss, saveLoss, editLoss, deleteLoss,
   renderEntryBudget, saveBudget, editBudget

@@ -90,6 +90,16 @@ function createTables() {
       utility_budget REAL,
       rm_budget REAL,
       volume_budget REAL
+    )`,
+    `CREATE TABLE IF NOT EXISTS capacity_weekly (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      month TEXT NOT NULL,
+      line TEXT NOT NULL,
+      week_label TEXT NOT NULL,
+      week_num INTEGER,
+      capacity REAL,
+      actual_output REAL,
+      UNIQUE(month, line, week_label)
     )`
   ];
 

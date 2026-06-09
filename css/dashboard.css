@@ -1,4 +1,3 @@
-
 :root {
   --blue: #1a56db;
   --blue-light: #e8f0fe;
@@ -186,6 +185,10 @@ tbody tr:hover td { background: var(--gray-50); }
 .import-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 18px; }
 .import-stat { border: 1px solid var(--gray-200); border-radius: var(--radius); padding: 14px; background: var(--gray-50); }
 .import-stat .metric-value { font-size: 24px; }
+
+/* Weekly panels */
+.weekly-panel { margin-top: 0; border-top-left-radius: 0; border-top-right-radius: 0; border-top: none; }
+#weekly-line-tabs { border-bottom: none; background: var(--white); border: 1px solid var(--gray-200); border-bottom: none; border-radius: var(--radius-lg) var(--radius-lg) 0 0; padding: 0 8px; }
  
 /* Responsive sidebar toggle */
 .sidebar-toggle { display: none; }

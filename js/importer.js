@@ -16,6 +16,9 @@ const MONTHS = {
   dec: 12, december: 12
 };
 
+// Matches: "APR WEEK 14", "MAY WK18", "JUN WK 10", "NOV WEEK 3" etc.
+const WEEK_LABEL_RE = /^(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|SEPT|OCT|NOV|DEC|JANUARY|FEBRUARY|MARCH|APRIL|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER)\s+(?:WEEK|WK)\s*(\d+)$/i;
+
 const PERIOD_RE = /\b(ACT|OB)\s*(\d{2,4})\s+([A-Z]{3,9})\b/i;
 const MONTH_RE = /^(JANUARY|JAN|FEBRUARY|FEB|MARCH|MAR|APRIL|APR|MAY|JUNE|JUN|JULY|JUL|AUGUST|AUG|SEPTEMBER|SEPT|SEP|OCTOBER|OCT|NOVEMBER|NOV|DECEMBER|DEC)$/i;
 
@@ -133,13 +136,14 @@ function createParsedData() {
     production: new Map(),
     budget: new Map(),
     capacity: new Map(),
+    capacity_weekly: new Map(),
     manhours: new Map(),
     loss: new Map()
   };
 }
 
 function createTotals() {
-  return { utilities: 0, production: 0, budget: 0, capacity: 0, manhours: 0, loss: 0 };
+  return { utilities: 0, production: 0, budget: 0, capacity: 0, capacity_weekly: 0, manhours: 0, loss: 0 };
 }
 
 function parsePeriodMetricSheet(sheet, parsed) {
@@ -213,18 +217,40 @@ function parseOperationalSheet(sheet, parsed, defaultFy) {
 
 function parseCapacityBlock(sheet, parsed, defaultFy, headingRow, startCol, range, line) {
   if (!line) return;
-  const endRow = Math.min(range.e.r, headingRow + 12);
+  const endRow = Math.min(range.e.r, headingRow + 40);
 
   for (let r = headingRow + 1; r <= endRow; r++) {
-    const label = cleanText(getCellValue(sheet, r, startCol));
-    if (!isMonthName(label)) continue;
+    const rawLabel = cleanText(getCellValue(sheet, r, startCol));
+    if (!rawLabel) continue;
 
-    const month = monthNameToIso(label, defaultFy);
-    const capacity = toNumber(getCellValue(sheet, r, startCol + 1));
-    const actual = toNumber(getCellValue(sheet, r, startCol + 2));
+    // ── Monthly total row ────────────────────────────────────────────────────
+    if (isMonthName(rawLabel)) {
+      const month = monthNameToIso(rawLabel, defaultFy);
+      const capacity = toNumber(getCellValue(sheet, r, startCol + 1));
+      const actual   = toNumber(getCellValue(sheet, r, startCol + 2));
+      if (capacity == null && actual == null) continue;
+      if (capacity === 0 && actual === 0) continue;
+      upsertMap(parsed.capacity, keyed(month, line), { month, line, capacity, actual_output: actual });
+      continue;
+    }
 
-    if (capacity == null && actual == null) continue;
-    upsertMap(parsed.capacity, keyed(month, line), { month, line, capacity, actual_output: actual });
+    // ── Weekly row  (e.g. "APR WEEK 14", "MAY WK18") ────────────────────────
+    const weekMatch = rawLabel.match(WEEK_LABEL_RE);
+    if (weekMatch) {
+      const monthAbbr  = weekMatch[1];
+      const weekNum    = parseInt(weekMatch[2], 10);
+      const month      = monthNameToIso(monthAbbr, defaultFy);
+      const weekLabel  = rawLabel.toUpperCase();          // normalise casing
+      const capacity   = toNumber(getCellValue(sheet, r, startCol + 1));
+      const actual     = toNumber(getCellValue(sheet, r, startCol + 2));
+      if (capacity == null && actual == null) continue;
+      if (capacity === 0 && actual === 0) continue;      // skip empty future weeks
+      upsertMap(
+        parsed.capacity_weekly,
+        keyed(month, line) + '::' + weekLabel,
+        { month, line, week_label: weekLabel, week_num: weekNum, capacity, actual_output: actual }
+      );
+    }
   }
 }
 
@@ -322,6 +348,16 @@ function applyParsedData(parsed) {
         capacity = COALESCE(excluded.capacity, capacity.capacity),
         actual_output = COALESCE(excluded.actual_output, capacity.actual_output)`,
       [r.month, r.line, nullIfMissing(r.capacity), nullIfMissing(r.actual_output)])) totals.capacity++;
+  });
+
+  parsed.capacity_weekly.forEach(r => {
+    if (isAllZeroOrNull(r, ['capacity', 'actual_output'])) return;
+    if (run(`INSERT INTO capacity_weekly (month, line, week_label, week_num, capacity, actual_output) VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(month, line, week_label) DO UPDATE SET
+        week_num = excluded.week_num,
+        capacity = COALESCE(excluded.capacity, capacity_weekly.capacity),
+        actual_output = COALESCE(excluded.actual_output, capacity_weekly.actual_output)`,
+      [r.month, r.line, r.week_label, r.week_num ?? null, nullIfMissing(r.capacity), nullIfMissing(r.actual_output)])) totals.capacity_weekly++;
   });
 
   parsed.manhours.forEach(r => {
@@ -511,7 +547,8 @@ function renderImportSummary(fileSummaries, totals) {
     ['Utilities', totals.utilities],
     ['Production', totals.production],
     ['Budget', totals.budget],
-    ['Capacity', totals.capacity],
+    ['Capacity (Monthly)', totals.capacity],
+    ['Capacity (Weekly)', totals.capacity_weekly],
     ['Manhours', totals.manhours],
     ['Loss', totals.loss]
   ].map(([label, value]) => `
