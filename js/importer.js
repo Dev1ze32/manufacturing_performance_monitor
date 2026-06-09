@@ -200,7 +200,7 @@ function parseOperationalSheet(sheet, parsed, defaultFy) {
       const text = cleanText(getCellValue(sheet, r, c));
       if (!text) continue;
 
-      if (/RUNRATE\s+EFFICIENCY/i.test(text) && /LINE/i.test(text)) {
+      if ((/RUNRATE\s+EFFICIENCY/i.test(text) || /OUTPUT\s+CAPACITY/i.test(text) || /CAPACITY\s+VS\s+ACTUAL/i.test(text)) && (/LINE/i.test(text) || /\bL\d/i.test(text))) {
         parseCapacityBlock(sheet, parsed, defaultFy, r, c, range, normalizeLineName(text));
       }
 
@@ -217,11 +217,16 @@ function parseOperationalSheet(sheet, parsed, defaultFy) {
 
 function parseCapacityBlock(sheet, parsed, defaultFy, headingRow, startCol, range, line) {
   if (!line) return;
-  const endRow = Math.min(range.e.r, headingRow + 40);
+  // Use full sheet range — multi-month blocks (e.g. Q3 = Apr/May/Jun) can span
+  // 45+ rows from the heading row, so the old +40 cutoff silently dropped June data.
+  const endRow = range.e.r;
 
   for (let r = headingRow + 1; r <= endRow; r++) {
     const rawLabel = cleanText(getCellValue(sheet, r, startCol));
     if (!rawLabel) continue;
+
+    // Stop if we hit another block heading in this column (next line's section starts)
+    if (/RUNRATE\s+EFFICIENCY/i.test(rawLabel) || /MANHOURS/i.test(rawLabel)) break;
 
     // ── Monthly total row ────────────────────────────────────────────────────
     if (isMonthName(rawLabel)) {
