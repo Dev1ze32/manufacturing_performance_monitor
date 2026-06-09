@@ -575,11 +575,31 @@ window.switchWeeklyTab = function(line, btn) {
  
 // ── MANHOURS DASHBOARD ─────────────────────────────────────────────────────────
 function renderManhours(c, month) {
-  const rows = getManhoursSummaryRows(month || '');
-  const mLabel = month ? fmtMonthLabel(month) : 'All Months';
-  const runrateRows = getRunrateSummaryRows(month || '');
-  const weeklyRunrateRows = month
-    ? query(`SELECT month, line, week_label, week_num, capacity, actual_output FROM capacity_weekly WHERE month = ? ORDER BY line, week_num ASC, week_label ASC`, [month])
+  const requestedMonth = month || '';
+  const allSummaryRows = getManhoursSummaryRows('');
+  const allRunrateRows = getRunrateSummaryRows('');
+  const latestDataMonth = (sourceRows) => {
+    const months = [...new Set(sourceRows.map(r => r.month).filter(Boolean))].sort();
+    return months.length ? months[months.length - 1] : '';
+  };
+  const requestedRunrateRows = requestedMonth ? allRunrateRows.filter(r => r.month === requestedMonth) : allRunrateRows;
+  const requestedManhoursRows = requestedMonth ? allSummaryRows.filter(r => r.month === requestedMonth) : allSummaryRows;
+  const runrateMonth = requestedMonth && !requestedRunrateRows.length ? latestDataMonth(allRunrateRows) : requestedMonth;
+  const manhoursMonth = requestedMonth && !requestedManhoursRows.length ? latestDataMonth(allSummaryRows) : requestedMonth;
+  const runrateRows = runrateMonth ? allRunrateRows.filter(r => r.month === runrateMonth) : allRunrateRows;
+  const rows = manhoursMonth ? allSummaryRows.filter(r => r.month === manhoursMonth) : allSummaryRows;
+  const runrateLabel = runrateMonth ? fmtMonthLabel(runrateMonth) : 'All Months';
+  const manhoursLabel = manhoursMonth ? fmtMonthLabel(manhoursMonth) : 'All Months';
+  const mLabel = runrateLabel === manhoursLabel ? runrateLabel : `Runrate ${runrateLabel} / Manhours ${manhoursLabel}`;
+  const fallbackNotes = [];
+  if (requestedMonth && runrateMonth && runrateMonth !== requestedMonth) {
+    fallbackNotes.push(`Runrate has no ${fmtMonthLabel(requestedMonth)} records, so it is showing ${runrateLabel}.`);
+  }
+  if (requestedMonth && manhoursMonth && manhoursMonth !== requestedMonth) {
+    fallbackNotes.push(`Manhours has no ${fmtMonthLabel(requestedMonth)} records, so it is showing ${manhoursLabel}.`);
+  }
+  const weeklyRunrateRows = runrateMonth
+    ? query(`SELECT month, line, week_label, week_num, capacity, actual_output FROM capacity_weekly WHERE month = ? ORDER BY line, week_num ASC, week_label ASC`, [runrateMonth])
     : query(`SELECT month, line, week_label, week_num, capacity, actual_output FROM capacity_weekly ORDER BY month DESC, line, week_num ASC, week_label ASC LIMIT 200`);
 
   let totalCapacity = 0, totalOutput = 0;
@@ -613,7 +633,6 @@ function renderManhours(c, month) {
   const avgManpower = manpowerValues.length ? manpowerValues.reduce((a,b)=>a+b,0) / manpowerValues.length : null;
  
   // trend
-  const allSummaryRows = getManhoursSummaryRows('');
   const trendByMonth = {};
   allSummaryRows.forEach(r => {
     if (!trendByMonth[r.month]) trendByMonth[r.month] = { month: r.month, pr: 0, ar: 0, pot: 0, aot: 0 };
@@ -636,9 +655,40 @@ function renderManhours(c, month) {
     if (mo <= 6)  return { q: 3, fy: yr };
     return         { q: 4, fy: yr };
   }
-  const allRunrateRows = getRunrateSummaryRows('');
-  const runrateByQuarter = {};
+  function sameFiscalQuarter(monthA, monthB) {
+    const a = fiscalQuarter(monthA);
+    const b = fiscalQuarter(monthB);
+    return a.q === b.q && a.fy === b.fy;
+  }
+  const runrateTrendByMonth = {};
   allRunrateRows.forEach(r => {
+    if (!runrateTrendByMonth[r.month]) runrateTrendByMonth[r.month] = { month: r.month, cap: 0, act: 0 };
+    runrateTrendByMonth[r.month].cap += r.capacity || 0;
+    runrateTrendByMonth[r.month].act += r.actual_output || 0;
+  });
+  const runrateTrendRows = Object.values(runrateTrendByMonth).sort((a, b) => String(a.month).localeCompare(String(b.month)));
+  const runrateTrendLabels = runrateTrendRows.map(r => fmtMonthLabel(r.month));
+  const runrateTrendCap = runrateTrendRows.map(r => r.cap);
+  const runrateTrendAct = runrateTrendRows.map(r => r.act);
+  const runrateTrendEff = runrateTrendRows.map(r => calcEfficiency(r.cap, r.act));
+
+  const runrateLineTotals = {};
+  runrateRows.forEach(r => {
+    const line = r.line || 'Plant-wide';
+    if (!runrateLineTotals[line]) runrateLineTotals[line] = { line, cap: 0, act: 0 };
+    runrateLineTotals[line].cap += r.capacity || 0;
+    runrateLineTotals[line].act += r.actual_output || 0;
+  });
+  const runrateLineRows = Object.values(runrateLineTotals).sort((a, b) => String(a.line).localeCompare(String(b.line)));
+  const runrateLineLabels = runrateLineRows.map(r => r.line);
+  const runrateLineEff = runrateLineRows.map(r => {
+    const eff = calcEfficiency(r.cap, r.act);
+    return eff === null ? null : eff * 100;
+  });
+
+  const runrateQuarterRows = runrateMonth ? allRunrateRows.filter(r => sameFiscalQuarter(r.month, runrateMonth)) : allRunrateRows;
+  const runrateByQuarter = {};
+  runrateQuarterRows.forEach(r => {
     const { q, fy } = fiscalQuarter(r.month);
     const key = `FY${fy} Q${q}`;
     if (!runrateByQuarter[key]) runrateByQuarter[key] = { cap:0, act:0, months:[] };
@@ -651,8 +701,9 @@ function renderManhours(c, month) {
     return fyA!==fyB ? fyA-fyB : qA-qB;
   });
 
+  const manhoursQuarterRows = manhoursMonth ? allSummaryRows.filter(r => sameFiscalQuarter(r.month, manhoursMonth)) : allSummaryRows;
   const mhByQuarter = {};
-  allSummaryRows.forEach(r => {
+  manhoursQuarterRows.forEach(r => {
     const { q, fy } = fiscalQuarter(r.month);
     const key = `FY${fy} Q${q}`;
     if (!mhByQuarter[key]) mhByQuarter[key] = { pr:0, ar:0, pot:0, aot:0, abs:0, personDays:0, months:[] };
@@ -668,20 +719,26 @@ function renderManhours(c, month) {
     const [,fyA,qA]=a.match(/FY(\d+) Q(\d)/); const [,fyB,qB]=b.match(/FY(\d+) Q(\d)/);
     return fyA!==fyB ? fyA-fyB : qA-qB;
   });
+
+  const manhoursLineTotals = {};
+  rows.forEach(r => {
+    const line = r.line || 'Plant-wide';
+    if (!manhoursLineTotals[line]) manhoursLineTotals[line] = { line, planned: 0, actual: 0 };
+    manhoursLineTotals[line].planned += (r.planned_reg || 0) + (r.planned_ot || 0);
+    manhoursLineTotals[line].actual += (r.actual_reg || 0) + (r.actual_ot || 0);
+  });
+  const manhoursLineRows = Object.values(manhoursLineTotals).sort((a, b) => String(a.line).localeCompare(String(b.line)));
+  const manhoursLineLabels = manhoursLineRows.map(r => r.line);
+  const manhoursLineUtil = manhoursLineRows.map(r => r.planned > 0 ? (r.actual / r.planned) * 100 : null);
  
   c.innerHTML = `
     <div class="page-header">
       <h1>Runrate &amp; Manhours Dashboard</h1>
       <p>Weekly runrate efficiency and monthly manhours utilization - ${mLabel}</p>
     </div>
+    ${fallbackNotes.length ? `<div class="info-block">${fallbackNotes.join(' ')}</div>` : ''}
     <div class="section-gap">
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px">
-        <div class="card-title" style="color:var(--gray-500)">RUNRATE EFFICIENCY</div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="btn btn-sm btn-secondary" onclick="navigateTo('entry-capacity')">Add Weekly Runrate</button>
-          ${runrateRows.length ? `<button class="btn btn-sm btn-danger" onclick="clearRunrateRecords()">Clear Runrate Data</button>` : ''}
-        </div>
-      </div>
+      <div class="card-title" style="margin-bottom:12px;color:var(--gray-500)">RUNRATE EFFICIENCY - ${runrateLabel}</div>
       <div class="metrics-grid">
         <div class="metric-card">
           <div class="metric-label">Capacity</div>
@@ -698,6 +755,21 @@ function renderManhours(c, month) {
           <div class="metric-value">${runrateEff !== null ? (runrateEff*100).toFixed(2)+'%' : '&mdash;'}</div>
           <div class="metric-sub">${totalCapacity > 0 ? `${fmtN(totalOutput,0)} / ${fmtN(totalCapacity,0)}` : 'No runrate data'}</div>
           <div class="progress-bar"><div class="progress-fill ${runrateEff>=0.95?'progress-green':runrateEff>=0.85?'progress-amber':'progress-red'}" style="width:${runrateEff?Math.min(runrateEff*100,100):0}%"></div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid-2 section-gap">
+      <div class="card">
+        <div class="card-title" style="margin-bottom:14px">Runrate Monthly Trend</div>
+        <div class="chart-container">
+          ${runrateTrendLabels.length ? '<canvas id="runrateTrendChart" aria-label="Runrate monthly trend">Runrate monthly trend</canvas>' : '<div class="empty"><p>No runrate trend data yet.</p></div>'}
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title" style="margin-bottom:14px">Runrate Efficiency by Line</div>
+        <div class="chart-container">
+          ${runrateLineLabels.length ? '<canvas id="runrateLineChart" aria-label="Runrate efficiency by line">Runrate efficiency by line</canvas>' : `<div class="empty"><p>No runrate line data for ${runrateLabel}.</p></div>`}
         </div>
       </div>
     </div>
@@ -770,7 +842,7 @@ function renderManhours(c, month) {
     </div>
 
     <div class="section-gap">
-      <div class="card-title" style="margin-bottom:12px;color:var(--gray-500)">MANHOURS</div>
+      <div class="card-title" style="margin-bottom:12px;color:var(--gray-500)">MANHOURS - ${manhoursLabel}</div>
     </div>
     <div class="metrics-grid section-gap">
       <div class="metric-card">
@@ -806,10 +878,25 @@ function renderManhours(c, month) {
         <div class="metric-sub">Reg + OT actual${totalMhUtil !== null ? ` · <strong>${(totalMhUtil*100).toFixed(2)}%</strong> total utilization` : ''}</div>
       </div>
     </div>
+    <div class="grid-2 section-gap">
+      <div class="card">
+        <div class="card-title" style="margin-bottom:14px">Manhours Utilization Trend</div>
+        <div class="chart-container">
+          ${trendLabels.length ? '<canvas id="mhTrendChart" aria-label="Manhours utilization trend">Manhours trend</canvas>' : '<div class="empty"><p>No manhours trend data yet.</p></div>'}
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title" style="margin-bottom:14px">Planned vs Actual Manhours</div>
+        <div class="chart-container">
+          ${trendLabels.length ? '<canvas id="mhPlanActualChart" aria-label="Planned versus actual manhours">Planned versus actual manhours</canvas>' : '<div class="empty"><p>No planned/actual manhours data yet.</p></div>'}
+        </div>
+      </div>
+    </div>
+
     <div class="card section-gap">
-      <div class="card-title" style="margin-bottom:14px">Utilization Trend</div>
+      <div class="card-title" style="margin-bottom:14px">Manhours Utilization by Line</div>
       <div class="chart-container">
-        <canvas id="mhTrendChart" aria-label="Manhours utilization trend">Manhours trend</canvas>
+        ${manhoursLineLabels.length ? '<canvas id="mhLineChart" aria-label="Manhours utilization by line">Manhours utilization by line</canvas>' : `<div class="empty"><p>No manhours line data for ${manhoursLabel}.</p></div>`}
       </div>
     </div>
 
@@ -880,6 +967,57 @@ function renderManhours(c, month) {
     </div>
   `;
  
+  destroyChart('runrateTrend');
+  const runrateTrendCtx = document.getElementById('runrateTrendChart');
+  if (runrateTrendCtx && runrateTrendLabels.length) {
+    charts['runrateTrend'] = new Chart(runrateTrendCtx, {
+      type: 'bar',
+      data: {
+        labels: runrateTrendLabels,
+        datasets: [
+          { label: 'Capacity', data: runrateTrendCap, backgroundColor: 'rgba(59,130,246,0.35)', borderRadius: 4, yAxisID: 'y' },
+          { label: 'Actual', data: runrateTrendAct, backgroundColor: 'rgba(20,184,166,0.55)', borderRadius: 4, yAxisID: 'y' },
+          { type: 'line', label: 'Efficiency %', data: runrateTrendEff.map(v => v === null ? null : v * 100), borderColor: '#d97706', borderWidth: 2, tension: 0.3, pointRadius: 3, yAxisID: 'yPct' }
+        ]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { labels: { font:{size:11}, boxWidth:10 } } },
+        scales: {
+          y: { position: 'left', grid:{color:'#f1f5f9'}, ticks:{font:{size:11}} },
+          yPct: { position: 'right', grid:{drawOnChartArea:false}, ticks:{font:{size:11}, callback:v=>v.toFixed(0)+'%'} },
+          x: { grid:{display:false}, ticks:{font:{size:11}, maxRotation:45} }
+        }
+      }
+    });
+  }
+
+  destroyChart('runrateLine');
+  const runrateLineCtx = document.getElementById('runrateLineChart');
+  if (runrateLineCtx && runrateLineLabels.length) {
+    charts['runrateLine'] = new Chart(runrateLineCtx, {
+      type: 'bar',
+      data: {
+        labels: runrateLineLabels,
+        datasets: [{
+          label: 'Efficiency %',
+          data: runrateLineEff,
+          backgroundColor: runrateLineEff.map(v => v == null ? '#cbd5e1' : v >= 95 ? '#0d9488' : v >= 85 ? '#d97706' : '#dc2626'),
+          borderRadius: 4
+        }]
+      },
+      options: {
+        indexAxis: 'y',
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display:false } },
+        scales: {
+          x: { grid:{color:'#f1f5f9'}, ticks:{font:{size:11}, callback:v=>v.toFixed(0)+'%'} },
+          y: { grid:{display:false}, ticks:{font:{size:11}} }
+        }
+      }
+    });
+  }
+
   destroyChart('mhTrend');
   const ctx=document.getElementById('mhTrendChart');
   if(ctx && trendLabels.length){
@@ -893,6 +1031,40 @@ function renderManhours(c, month) {
         plugins:{legend:{labels:{font:{size:11},boxWidth:10}}},
         scales:{y:{ticks:{font:{size:11},callback:v=>v.toFixed(0)+'%'},grid:{color:'#f1f5f9'}},
           x:{grid:{display:false},ticks:{font:{size:11},maxRotation:45}}}}
+    });
+  }
+
+  destroyChart('mhPlanActual');
+  const mhPlanCtx = document.getElementById('mhPlanActualChart');
+  if (mhPlanCtx && trendLabels.length) {
+    charts['mhPlanActual'] = new Chart(mhPlanCtx, {
+      type:'bar',
+      data:{labels:trendLabels,datasets:[
+        {label:'Planned',data:trendRows.map(r => (r.pr || 0) + (r.pot || 0)),backgroundColor:'rgba(59,130,246,0.35)',borderRadius:4},
+        {label:'Actual',data:trendRows.map(r => (r.ar || 0) + (r.aot || 0)),backgroundColor:'rgba(20,184,166,0.55)',borderRadius:4}
+      ]},
+      options:{responsive:true,maintainAspectRatio:false,
+        plugins:{legend:{labels:{font:{size:11},boxWidth:10}}},
+        scales:{y:{grid:{color:'#f1f5f9'},ticks:{font:{size:11}}},
+          x:{grid:{display:false},ticks:{font:{size:11},maxRotation:45}}}}
+    });
+  }
+
+  destroyChart('mhLine');
+  const mhLineCtx = document.getElementById('mhLineChart');
+  if (mhLineCtx && manhoursLineLabels.length) {
+    charts['mhLine'] = new Chart(mhLineCtx, {
+      type:'bar',
+      data:{labels:manhoursLineLabels,datasets:[{
+        label:'Total Utilization %',
+        data:manhoursLineUtil,
+        backgroundColor:manhoursLineUtil.map(v => v == null ? '#cbd5e1' : v >= 90 ? '#0d9488' : v >= 80 ? '#d97706' : '#dc2626'),
+        borderRadius:4
+      }]},
+      options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,
+        plugins:{legend:{display:false}},
+        scales:{x:{grid:{color:'#f1f5f9'},ticks:{font:{size:11},callback:v=>v.toFixed(0)+'%'}},
+          y:{grid:{display:false},ticks:{font:{size:11}}}}}
     });
   }
 }
