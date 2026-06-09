@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Manufacturing Performance Monitoring System</title>
+  
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.2/sql-wasm.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+  
+  <link rel="stylesheet" href="css/dashboard.css">
+</head>
+<body>
+
+<div class="app">
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <div class="sidebar-logo">Manufacturing</div>
+      <div class="sidebar-title">Performance Monitor</div>
+    </div>
+    <nav class="sidebar-nav">
+      <div class="nav-section">
+        <div class="nav-label">Dashboards</div>
+        <button class="nav-item active" data-page="executive" onclick="navigateTo(this.dataset.page)">Executive Summary</button>
+        <button class="nav-item" data-page="cost" onclick="navigateTo(this.dataset.page)">Cost Dashboard</button>
+        <button class="nav-item" data-page="production" onclick="navigateTo(this.dataset.page)">Production Dashboard</button>
+        <button class="nav-item" data-page="manhours" onclick="navigateTo(this.dataset.page)">Manhours Dashboard</button>
+        <button class="nav-item" data-page="loss" onclick="navigateTo(this.dataset.page)">Loss Analysis</button>
+        <button class="nav-item" data-page="budget" onclick="navigateTo(this.dataset.page)">Budget vs Actual</button>
+      </div>
+      <div class="nav-section">
+        <div class="nav-label">Data Entry</div>
+        <button class="nav-item" data-page="entry-utilities" onclick="navigateTo(this.dataset.page)">Utilities & R&M</button>
+        <button class="nav-item" data-page="entry-production" onclick="navigateTo(this.dataset.page)">Production Volume</button>
+        <button class="nav-item" data-page="entry-capacity" onclick="navigateTo(this.dataset.page)">Capacity & Efficiency</button>
+        <button class="nav-item" data-page="entry-manhours" onclick="navigateTo(this.dataset.page)">Manhours</button>
+        <button class="nav-item" data-page="entry-loss" onclick="navigateTo(this.dataset.page)">Loss Analysis</button>
+        <button class="nav-item" data-page="entry-budget" onclick="navigateTo(this.dataset.page)">Budget</button>
+      </div>
+    </nav>
+    <div class="month-filter">
+      <label>Viewing Period</label>
+      <select id="globalMonth" onchange="onGlobalMonthChange()">
+        <option value="">All Months</option>
+      </select>
+    </div>
+  </aside>
+
+  <main class="main" id="main">
+    <div id="page-executive"></div>
+    <div id="page-cost" style="display:none"></div>
+    <div id="page-production" style="display:none"></div>
+    <div id="page-manhours" style="display:none"></div>
+    <div id="page-loss" style="display:none"></div>
+    <div id="page-budget" style="display:none"></div>
+    <div id="page-entry-utilities" style="display:none"></div>
+    <div id="page-entry-production" style="display:none"></div>
+    <div id="page-entry-capacity" style="display:none"></div>
+    <div id="page-entry-manhours" style="display:none"></div>
+    <div id="page-entry-loss" style="display:none"></div>
+    <div id="page-entry-budget" style="display:none"></div>
+  </main>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script type="module" src="./js/app.js"></script>
+</body>
+</html>
