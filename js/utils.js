@@ -40,7 +40,7 @@ export function getDistinctMonths() {
   const sets = [
     query('SELECT DISTINCT month FROM utilities'),
     query('SELECT DISTINCT month FROM production'),
-    query('SELECT DISTINCT month FROM capacity'),
+    query('SELECT DISTINCT month FROM capacity_weekly'),
     query('SELECT DISTINCT month FROM manhours'),
     query('SELECT DISTINCT month FROM loss'),
     query('SELECT DISTINCT month FROM budget')
@@ -95,9 +95,66 @@ export function calcEnggCostPerKg(util_cost, rm_cost, volume) { return (!volume 
 export function calcEfficiency(capacity, actual) { return (!capacity || capacity === 0) ? null : actual / capacity; }
 export function calcRegHrsUtil(actual_reg, planned_reg) { return (!planned_reg || planned_reg === 0) ? null : actual_reg / planned_reg; }
 export function calcOTUtil(actual_ot, planned_ot) { return (!planned_ot || planned_ot === 0) ? null : actual_ot / planned_ot; }
+export function calcPersonDays(working_days, manpower) {
+  return (!working_days || !manpower || working_days <= 0 || manpower <= 0) ? null : working_days * manpower;
+}
+export function calcPlannedRegHours(working_days, manpower) {
+  const personDays = calcPersonDays(working_days, manpower);
+  return personDays === null ? null : personDays * 8;
+}
+export function calcPlannedOTHours(working_days, manpower) {
+  const personDays = calcPersonDays(working_days, manpower);
+  return personDays === null ? null : personDays * 4;
+}
+export function calcTotalManhoursUtil(actual_reg, actual_ot, planned_reg, planned_ot) {
+  const planned = (planned_reg || 0) + (planned_ot || 0);
+  return planned <= 0 ? null : ((actual_reg || 0) + (actual_ot || 0)) / planned;
+}
+export function calcAbsenteeismRate(absenteeism, working_days, manpower, planned_reg) {
+  const personDays = calcPersonDays(working_days, manpower);
+  const plannedPersonDays = planned_reg > 0 ? planned_reg / 8 : null;
+  const baseDays = personDays || plannedPersonDays;
+  return (!baseDays || absenteeism == null) ? null : absenteeism / baseDays;
+}
 export function calcLossContribution(individual_loss, total_loss) { return (!total_loss || total_loss === 0) ? null : individual_loss / total_loss; }
 export function calcVariance(actual, budget) { return actual - budget; }
 export function calcVariancePct(actual, budget) { return (!budget || budget === 0) ? null : (actual - budget) / Math.abs(budget); }
+
+export function getManhoursSummaryRows(month = '') {
+  const where = month ? 'WHERE m.month = ?' : '';
+  const params = month ? [month] : [];
+
+  return query(`SELECT
+      m.month,
+      m.line,
+      m.working_days,
+      m.manpower,
+      CASE WHEN m.working_days IS NOT NULL AND m.manpower IS NOT NULL THEN m.working_days * m.manpower ELSE NULL END as person_days,
+      CASE WHEN m.working_days IS NOT NULL AND m.manpower IS NOT NULL THEN m.working_days * m.manpower * 8 ELSE m.planned_reg END as planned_reg,
+      m.actual_reg,
+      CASE WHEN m.working_days IS NOT NULL AND m.manpower IS NOT NULL THEN m.working_days * m.manpower * 4 ELSE m.planned_ot END as planned_ot,
+      m.actual_ot,
+      m.absenteeism,
+      0 as weekly_count
+    FROM manhours m
+    ${where}
+    ORDER BY m.month DESC, m.line`, params);
+}
+
+export function getRunrateSummaryRows(month = '') {
+  const weeklyWhere = month ? 'WHERE month = ?' : '';
+  const weeklyParams = month ? [month] : [];
+  return query(`SELECT
+      month,
+      line,
+      SUM(capacity) as capacity,
+      SUM(actual_output) as actual_output,
+      COUNT(*) as weekly_count
+    FROM capacity_weekly
+    ${weeklyWhere}
+    GROUP BY month, line
+    ORDER BY month DESC, line`, weeklyParams);
+}
 
 export function getMonthData(month) {
   const u = month

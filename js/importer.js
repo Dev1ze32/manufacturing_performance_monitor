@@ -1,5 +1,5 @@
 import { run } from './database.js';
-import { fmtMonthLabel, populateMonthFilter, showToast } from './utils.js';
+import { fmtMonthLabel, populateMonthFilter, showToast, calcPlannedRegHours, calcPlannedOTHours } from './utils.js';
 
 const MONTHS = {
   jan: 1, january: 1,
@@ -32,7 +32,7 @@ function renderImport(c) {
 
     <div class="card section-gap">
       <div class="info-block">
-        <strong>Supported patterns:</strong> utilities workbooks with ACT/OB fiscal period columns, and production workbooks with repeated line blocks for capacity and manhours.
+        <strong>Supported patterns:</strong> utilities workbooks with ACT/OB fiscal period columns, runrate efficiency blocks with weekly capacity/actual rows, and monthly manhours blocks with working days/manpower formulas.
       </div>
       <div class="form-section">
         <div class="form-section-title">Workbook Import</div>
@@ -230,12 +230,6 @@ function parseCapacityBlock(sheet, parsed, defaultFy, headingRow, startCol, rang
 
     // ── Monthly total row ────────────────────────────────────────────────────
     if (isMonthName(rawLabel)) {
-      const month = monthNameToIso(rawLabel, defaultFy);
-      const capacity = toNumber(getCellValue(sheet, r, startCol + 1));
-      const actual   = toNumber(getCellValue(sheet, r, startCol + 2));
-      if (capacity == null && actual == null) continue;
-      if (capacity === 0 && actual === 0) continue;
-      upsertMap(parsed.capacity, keyed(month, line), { month, line, capacity, actual_output: actual });
       continue;
     }
 
@@ -267,26 +261,39 @@ function parseManhoursBlock(sheet, parsed, defaultFy, headingRow, startCol, rang
     if (!isMonthName(label)) continue;
 
     const month = monthNameToIso(label, defaultFy);
-    const record = { month, line };
     const sectionEnd = findNextMonthSection(sheet, startCol, r + 1, range.e.r);
+    const record = { month, line };
 
     for (let rr = r + 1; rr < sectionEnd; rr++) {
       const rowLabel = cleanText(getCellValue(sheet, rr, startCol));
+      if (!rowLabel) continue;
+
       const planned = toNumber(getCellValue(sheet, rr, startCol + 1));
       const actual = toNumber(getCellValue(sheet, rr, startCol + 2));
 
-      if (/^REG\s+HRS/i.test(rowLabel)) {
-        record.planned_reg = planned;
+      if (/^working days/i.test(rowLabel)) {
+        record.working_days = planned;
+      } else if (/^manpower/i.test(rowLabel)) {
+        record.manpower = planned;
+      } else if (/^reg\s+hrs/i.test(rowLabel)) {
         record.actual_reg = actual;
-      } else if (/^OT\s+HRS/i.test(rowLabel)) {
-        record.planned_ot = planned;
+        if (record.working_days == null || record.manpower == null) record.planned_reg = planned;
+      } else if (/^ot\s+hrs/i.test(rowLabel)) {
         record.actual_ot = actual;
-      } else if (/ABSENTEEISM/i.test(rowLabel)) {
+        if (record.working_days == null || record.manpower == null) record.planned_ot = planned;
+      } else if (/^absenteeism/i.test(rowLabel)) {
         record.absenteeism = actual ?? planned;
+      } else {
+        continue;
       }
     }
 
-    if (hasAnyNumber(record, ['planned_reg', 'actual_reg', 'planned_ot', 'actual_ot', 'absenteeism'])) {
+    const plannedReg = calcPlannedRegHours(record.working_days, record.manpower);
+    const plannedOT = calcPlannedOTHours(record.working_days, record.manpower);
+    if (plannedReg !== null) record.planned_reg = plannedReg;
+    if (plannedOT !== null) record.planned_ot = plannedOT;
+
+    if (hasAnyNumber(record, ['planned_reg', 'actual_reg', 'planned_ot', 'actual_ot', 'absenteeism', 'working_days', 'manpower'])) {
       upsertMap(parsed.manhours, keyed(month, line), record);
     }
   }
@@ -346,15 +353,6 @@ function applyParsedData(parsed) {
       [month, nullIfMissing(r.utility_budget), nullIfMissing(r.rm_budget), nullIfMissing(r.volume_budget)])) totals.budget++;
   });
 
-  parsed.capacity.forEach(r => {
-    if (isAllZeroOrNull(r, ['capacity', 'actual_output'])) return;
-    if (run(`INSERT INTO capacity (month, line, capacity, actual_output) VALUES (?, ?, ?, ?)
-      ON CONFLICT(month, line) DO UPDATE SET
-        capacity = COALESCE(excluded.capacity, capacity.capacity),
-        actual_output = COALESCE(excluded.actual_output, capacity.actual_output)`,
-      [r.month, r.line, nullIfMissing(r.capacity), nullIfMissing(r.actual_output)])) totals.capacity++;
-  });
-
   parsed.capacity_weekly.forEach(r => {
     if (isAllZeroOrNull(r, ['capacity', 'actual_output'])) return;
     if (run(`INSERT INTO capacity_weekly (month, line, week_label, week_num, capacity, actual_output) VALUES (?, ?, ?, ?, ?, ?)
@@ -362,19 +360,27 @@ function applyParsedData(parsed) {
         week_num = excluded.week_num,
         capacity = COALESCE(excluded.capacity, capacity_weekly.capacity),
         actual_output = COALESCE(excluded.actual_output, capacity_weekly.actual_output)`,
-      [r.month, r.line, r.week_label, r.week_num ?? null, nullIfMissing(r.capacity), nullIfMissing(r.actual_output)])) totals.capacity_weekly++;
+      [r.month, r.line, r.week_label, r.week_num ?? null, nullIfMissing(r.capacity), nullIfMissing(r.actual_output)])) {
+      run(`DELETE FROM capacity WHERE month = ? AND line = ?`, [r.month, r.line]);
+      totals.capacity_weekly++;
+    }
   });
 
   parsed.manhours.forEach(r => {
-    if (isAllZeroOrNull(r, ['planned_reg', 'actual_reg', 'planned_ot', 'actual_ot', 'absenteeism'])) return;
-    if (run(`INSERT INTO manhours (month, line, planned_reg, actual_reg, planned_ot, actual_ot, absenteeism) VALUES (?, ?, ?, ?, ?, ?, ?)
+    if (isAllZeroOrNull(r, ['planned_reg', 'actual_reg', 'planned_ot', 'actual_ot', 'absenteeism', 'working_days', 'manpower'])) return;
+    if (run(`INSERT INTO manhours (month, line, working_days, manpower, planned_reg, actual_reg, planned_ot, actual_ot, absenteeism) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(month, line) DO UPDATE SET
+        working_days = COALESCE(excluded.working_days, manhours.working_days),
+        manpower = COALESCE(excluded.manpower, manhours.manpower),
         planned_reg = COALESCE(excluded.planned_reg, manhours.planned_reg),
         actual_reg = COALESCE(excluded.actual_reg, manhours.actual_reg),
         planned_ot = COALESCE(excluded.planned_ot, manhours.planned_ot),
         actual_ot = COALESCE(excluded.actual_ot, manhours.actual_ot),
         absenteeism = COALESCE(excluded.absenteeism, manhours.absenteeism)`,
-      [r.month, r.line || '', nullIfMissing(r.planned_reg), nullIfMissing(r.actual_reg), nullIfMissing(r.planned_ot), nullIfMissing(r.actual_ot), nullIfMissing(r.absenteeism)])) totals.manhours++;
+      [r.month, r.line || '', nullIfMissing(r.working_days), nullIfMissing(r.manpower), nullIfMissing(r.planned_reg), nullIfMissing(r.actual_reg), nullIfMissing(r.planned_ot), nullIfMissing(r.actual_ot), nullIfMissing(r.absenteeism)])) {
+      run(`DELETE FROM manhours_weekly WHERE month = ? AND line = ?`, [r.month, r.line || '']);
+      totals.manhours++;
+    }
   });
 
   parsed.loss.forEach(r => {
@@ -552,9 +558,8 @@ function renderImportSummary(fileSummaries, totals) {
     ['Utilities', totals.utilities],
     ['Production', totals.production],
     ['Budget', totals.budget],
-    ['Capacity (Monthly)', totals.capacity],
-    ['Capacity (Weekly)', totals.capacity_weekly],
-    ['Manhours', totals.manhours],
+    ['Runrate Weekly', totals.capacity_weekly],
+    ['Manhours (Monthly)', totals.manhours],
     ['Loss', totals.loss]
   ].map(([label, value]) => `
     <div class="import-stat">
@@ -589,7 +594,7 @@ function collectMonths(parsed) {
   ['utilities', 'production', 'budget'].forEach(key => {
     parsed[key].forEach((_, month) => months.add(month));
   });
-  ['capacity', 'manhours', 'loss'].forEach(key => {
+  ['capacity_weekly', 'manhours', 'loss'].forEach(key => {
     parsed[key].forEach(record => months.add(record.month));
   });
   return [...months].filter(Boolean).sort();

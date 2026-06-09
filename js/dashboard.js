@@ -3,6 +3,8 @@ import {
   fmt, fmtN, fmtPct, fmtMonthLabel, getKPIs, calcUtilCostPerKg, 
   calcRMCostPerKg, calcEnggCostPerKg, calcEfficiency, 
   calcRegHrsUtil, calcOTUtil, calcLossContribution, calcVariance, calcVariancePct,
+  calcPersonDays, calcAbsenteeismRate, calcTotalManhoursUtil,
+  calcPlannedRegHours, calcPlannedOTHours, getManhoursSummaryRows, getRunrateSummaryRows,
   destroyChart, charts 
 } from './utils.js';
 
@@ -12,18 +14,21 @@ function renderExecutive(c, month) {
   const kpis = getKPIs(month);
   const mLabel = month ? fmtMonthLabel(month) : 'All Months';
  
-  // Get efficiency for selected month
-  const capRows = month ? query(`SELECT * FROM capacity WHERE month = ?`, [month]) :
-    query(`SELECT * FROM capacity ORDER BY month DESC`);
+  // Runrate efficiency is generated from weekly capacity/actual rows.
+  const capRows = getRunrateSummaryRows(month || '');
   let totalCap = 0, totalActual = 0;
   capRows.forEach(r => { totalCap += r.capacity||0; totalActual += r.actual_output||0; });
   const efficiency = totalCap > 0 ? totalActual/totalCap : null;
  
   // Manhours
-  const mhRows = month ? query(`SELECT * FROM manhours WHERE month = ?`, [month]) :
-    query(`SELECT * FROM manhours ORDER BY month DESC`);
+  const mhRows = getManhoursSummaryRows(month || '');
   let sumPReg=0, sumAReg=0, sumPOT=0, sumAOT=0;
-  mhRows.forEach(r => { sumPReg+=r.planned_reg||0; sumAReg+=r.actual_reg||0; sumPOT+=r.planned_ot||0; sumAOT+=r.actual_ot||0; });
+  mhRows.forEach(r => {
+    sumPReg += r.planned_reg || calcPlannedRegHours(r.working_days, r.manpower) || 0;
+    sumAReg += r.actual_reg || 0;
+    sumPOT += r.planned_ot || calcPlannedOTHours(r.working_days, r.manpower) || 0;
+    sumAOT += r.actual_ot || 0;
+  });
  
   const regUtil = calcRegHrsUtil(sumAReg, sumPReg);
   const otUtil = calcOTUtil(sumAOT, sumPOT);
@@ -570,19 +575,54 @@ window.switchWeeklyTab = function(line, btn) {
  
 // ── MANHOURS DASHBOARD ─────────────────────────────────────────────────────────
 function renderManhours(c, month) {
-  const filter = month ? `WHERE month = '${month}'` : '';
-  const rows = query(`SELECT * FROM manhours ${filter} ORDER BY month DESC, line`);
+  const rows = getManhoursSummaryRows(month || '');
   const mLabel = month ? fmtMonthLabel(month) : 'All Months';
+  const runrateRows = getRunrateSummaryRows(month || '');
+  const weeklyRunrateRows = month
+    ? query(`SELECT month, line, week_label, week_num, capacity, actual_output FROM capacity_weekly WHERE month = ? ORDER BY line, week_num ASC, week_label ASC`, [month])
+    : query(`SELECT month, line, week_label, week_num, capacity, actual_output FROM capacity_weekly ORDER BY month DESC, line, week_num ASC, week_label ASC LIMIT 200`);
+
+  let totalCapacity = 0, totalOutput = 0;
+  runrateRows.forEach(r => {
+    totalCapacity += r.capacity || 0;
+    totalOutput += r.actual_output || 0;
+  });
+  const runrateEff = calcEfficiency(totalCapacity, totalOutput);
  
   // aggregate
-  let totPR=0,totAR=0,totPOT=0,totAOT=0,totAbs=0;
-  rows.forEach(r=>{totPR+=r.planned_reg||0;totAR+=r.actual_reg||0;totPOT+=r.planned_ot||0;totAOT+=r.actual_ot||0;totAbs+=r.absenteeism||0;});
+  let totPR=0,totAR=0,totPOT=0,totAOT=0,totAbs=0, totPersonDays=0;
+  const workdayValues = [];
+  const manpowerValues = [];
+  rows.forEach(r=>{
+    totPR+=r.planned_reg||0;
+    totAR+=r.actual_reg||0;
+    totPOT+=r.planned_ot||0;
+    totAOT+=r.actual_ot||0;
+    totAbs+=r.absenteeism||0;
+    const personDays = r.person_days ?? calcPersonDays(r.working_days, r.manpower);
+    if (personDays !== null) totPersonDays += personDays;
+    if (r.working_days != null) workdayValues.push(Number(r.working_days));
+    if (r.manpower != null) manpowerValues.push(Number(r.manpower));
+  });
   const regUtil=calcRegHrsUtil(totAR,totPR), otUtil=calcOTUtil(totAOT,totPOT);
+  const totalMhUtil = calcTotalManhoursUtil(totAR, totAOT, totPR, totPOT);
   const plannedPersonDays = totPR > 0 ? totPR / 8 : 0;
-  const absPct = plannedPersonDays > 0 ? totAbs / plannedPersonDays : null;
+  const absPct = totPersonDays > 0 ? totAbs / totPersonDays : (plannedPersonDays > 0 ? totAbs / plannedPersonDays : null);
+  const displayedPersonDays = totPersonDays > 0 ? totPersonDays : plannedPersonDays;
+  const avgWorkdays = workdayValues.length ? workdayValues.reduce((a,b)=>a+b,0) / workdayValues.length : null;
+  const avgManpower = manpowerValues.length ? manpowerValues.reduce((a,b)=>a+b,0) / manpowerValues.length : null;
  
   // trend
-  const trendRows = query(`SELECT month, SUM(planned_reg) as pr, SUM(actual_reg) as ar, SUM(planned_ot) as pot, SUM(actual_ot) as aot FROM manhours GROUP BY month ORDER BY month`);
+  const allSummaryRows = getManhoursSummaryRows('');
+  const trendByMonth = {};
+  allSummaryRows.forEach(r => {
+    if (!trendByMonth[r.month]) trendByMonth[r.month] = { month: r.month, pr: 0, ar: 0, pot: 0, aot: 0 };
+    trendByMonth[r.month].pr += r.planned_reg || 0;
+    trendByMonth[r.month].ar += r.actual_reg || 0;
+    trendByMonth[r.month].pot += r.planned_ot || 0;
+    trendByMonth[r.month].aot += r.actual_ot || 0;
+  });
+  const trendRows = Object.values(trendByMonth).sort((a, b) => String(a.month).localeCompare(String(b.month)));
   const trendLabels = trendRows.map(r=>fmtMonthLabel(r.month));
   const trendReg = trendRows.map(r=>calcRegHrsUtil(r.ar,r.pr));
   const trendOT = trendRows.map(r=>calcOTUtil(r.aot,r.pot));
@@ -596,18 +636,33 @@ function renderManhours(c, month) {
     if (mo <= 6)  return { q: 3, fy: yr };
     return         { q: 4, fy: yr };
   }
-  const allMhRows = query(`SELECT month, SUM(planned_reg) as pr, SUM(actual_reg) as ar, SUM(planned_ot) as pot, SUM(actual_ot) as aot, SUM(absenteeism) as abs FROM manhours GROUP BY month ORDER BY month`);
-  const mhByQuarter = {};
-  allMhRows.forEach(r => {
+  const allRunrateRows = getRunrateSummaryRows('');
+  const runrateByQuarter = {};
+  allRunrateRows.forEach(r => {
     const { q, fy } = fiscalQuarter(r.month);
     const key = `FY${fy} Q${q}`;
-    if (!mhByQuarter[key]) mhByQuarter[key] = { pr:0, ar:0, pot:0, aot:0, abs:0, months:[] };
-    mhByQuarter[key].pr  += r.pr  || 0;
-    mhByQuarter[key].ar  += r.ar  || 0;
-    mhByQuarter[key].pot += r.pot || 0;
-    mhByQuarter[key].aot += r.aot || 0;
-    mhByQuarter[key].abs += r.abs || 0;
-    mhByQuarter[key].months.push(r.month);
+    if (!runrateByQuarter[key]) runrateByQuarter[key] = { cap:0, act:0, months:[] };
+    runrateByQuarter[key].cap += r.capacity || 0;
+    runrateByQuarter[key].act += r.actual_output || 0;
+    if (!runrateByQuarter[key].months.includes(r.month)) runrateByQuarter[key].months.push(r.month);
+  });
+  const runrateQKeys = Object.keys(runrateByQuarter).sort((a,b) => {
+    const [,fyA,qA]=a.match(/FY(\d+) Q(\d)/); const [,fyB,qB]=b.match(/FY(\d+) Q(\d)/);
+    return fyA!==fyB ? fyA-fyB : qA-qB;
+  });
+
+  const mhByQuarter = {};
+  allSummaryRows.forEach(r => {
+    const { q, fy } = fiscalQuarter(r.month);
+    const key = `FY${fy} Q${q}`;
+    if (!mhByQuarter[key]) mhByQuarter[key] = { pr:0, ar:0, pot:0, aot:0, abs:0, personDays:0, months:[] };
+    mhByQuarter[key].pr  += r.planned_reg  || 0;
+    mhByQuarter[key].ar  += r.actual_reg  || 0;
+    mhByQuarter[key].pot += r.planned_ot || 0;
+    mhByQuarter[key].aot += r.actual_ot || 0;
+    mhByQuarter[key].abs += r.absenteeism || 0;
+    mhByQuarter[key].personDays += r.person_days || calcPersonDays(r.working_days, r.manpower) || 0;
+    if (!mhByQuarter[key].months.includes(r.month)) mhByQuarter[key].months.push(r.month);
   });
   const mhQKeys = Object.keys(mhByQuarter).sort((a,b) => {
     const [,fyA,qA]=a.match(/FY(\d+) Q(\d)/); const [,fyB,qB]=b.match(/FY(\d+) Q(\d)/);
@@ -616,8 +671,106 @@ function renderManhours(c, month) {
  
   c.innerHTML = `
     <div class="page-header">
-      <h1>Manhours Dashboard</h1>
-      <p>Regular hours and OT utilization — ${mLabel}</p>
+      <h1>Runrate &amp; Manhours Dashboard</h1>
+      <p>Weekly runrate efficiency and monthly manhours utilization - ${mLabel}</p>
+    </div>
+    <div class="section-gap">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px">
+        <div class="card-title" style="color:var(--gray-500)">RUNRATE EFFICIENCY</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-sm btn-secondary" onclick="navigateTo('entry-capacity')">Add Weekly Runrate</button>
+          ${runrateRows.length ? `<button class="btn btn-sm btn-danger" onclick="clearRunrateRecords()">Clear Runrate Data</button>` : ''}
+        </div>
+      </div>
+      <div class="metrics-grid">
+        <div class="metric-card">
+          <div class="metric-label">Capacity</div>
+          <div class="metric-value">${runrateRows.length ? fmtN(totalCapacity,0) : '&mdash;'}</div>
+          <div class="metric-sub">planned output capacity</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Actual Output</div>
+          <div class="metric-value">${runrateRows.length ? fmtN(totalOutput,0) : '&mdash;'}</div>
+          <div class="metric-sub">actual weekly/monthly output</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Runrate Efficiency</div>
+          <div class="metric-value">${runrateEff !== null ? (runrateEff*100).toFixed(2)+'%' : '&mdash;'}</div>
+          <div class="metric-sub">${totalCapacity > 0 ? `${fmtN(totalOutput,0)} / ${fmtN(totalCapacity,0)}` : 'No runrate data'}</div>
+          <div class="progress-bar"><div class="progress-fill ${runrateEff>=0.95?'progress-green':runrateEff>=0.85?'progress-amber':'progress-red'}" style="width:${runrateEff?Math.min(runrateEff*100,100):0}%"></div></div>
+        </div>
+      </div>
+    </div>
+
+    ${runrateQKeys.length ? `
+    <div class="card section-gap">
+      <div class="card-title" style="margin-bottom:14px">Quarterly Runrate Summary</div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Quarter</th><th>Months</th><th>Capacity</th><th>Actual</th><th>Efficiency</th></tr></thead>
+          <tbody>
+            ${runrateQKeys.map(k => {
+              const q = runrateByQuarter[k];
+              const eff = calcEfficiency(q.cap, q.act);
+              return `<tr>
+                <td><strong>${k}</strong></td>
+                <td style="color:var(--gray-500);font-size:12px">${q.months.map(fmtMonthLabel).join(', ')}</td>
+                <td class="td-number">${fmtN(q.cap,0)}</td>
+                <td class="td-number">${fmtN(q.act,0)}</td>
+                <td class="td-number"><strong class="${eff&&eff>=0.95?'td-green':eff&&eff<0.85?'td-red':''}">${eff!==null?(eff*100).toFixed(2)+'%':'&mdash;'}</strong></td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>` : ''}
+
+    <div class="card section-gap">
+      <div class="card-title" style="margin-bottom:14px">Monthly Runrate by Line</div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Month</th><th>Line</th><th>Capacity</th><th>Actual</th><th>Efficiency</th><th>Weekly Rows</th></tr></thead>
+          <tbody>
+            ${runrateRows.length ? runrateRows.map(r => {
+              const eff = calcEfficiency(r.capacity, r.actual_output);
+              return `<tr>
+                <td>${fmtMonthLabel(r.month)}</td>
+                <td>${r.line||'&mdash;'}</td>
+                <td class="td-number">${fmtN(r.capacity,0)}</td>
+                <td class="td-number">${fmtN(r.actual_output,0)}</td>
+                <td class="td-number"><strong class="${eff&&eff>=0.95?'td-green':eff&&eff<0.85?'td-red':''}">${eff!==null?(eff*100).toFixed(2)+'%':'&mdash;'}</strong></td>
+                <td class="td-number">${r.weekly_count ? fmtN(r.weekly_count,0) : 'monthly total'}</td>
+              </tr>`;
+            }).join('') : '<tr><td colspan="6"><div class="empty"><p>No runrate data yet.</p></div></td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card section-gap">
+      <div class="card-title" style="margin-bottom:14px">Weekly Runrate Details</div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Month</th><th>Line</th><th>Week</th><th>Capacity</th><th>Actual</th><th>Efficiency</th></tr></thead>
+          <tbody>
+            ${weeklyRunrateRows.length ? weeklyRunrateRows.map(r => {
+              const eff = calcEfficiency(r.capacity, r.actual_output);
+              return `<tr>
+                <td>${fmtMonthLabel(r.month)}</td>
+                <td>${r.line||'&mdash;'}</td>
+                <td><strong>${r.week_label||'&mdash;'}</strong></td>
+                <td class="td-number">${fmtN(r.capacity,0)}</td>
+                <td class="td-number">${fmtN(r.actual_output,0)}</td>
+                <td class="td-number"><strong class="${eff&&eff>=0.95?'td-green':eff&&eff<0.85?'td-red':''}">${eff!==null?(eff*100).toFixed(2)+'%':'&mdash;'}</strong></td>
+              </tr>`;
+            }).join('') : '<tr><td colspan="6"><div class="empty"><p>No weekly runrate data yet.</p></div></td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="section-gap">
+      <div class="card-title" style="margin-bottom:12px;color:var(--gray-500)">MANHOURS</div>
     </div>
     <div class="metrics-grid section-gap">
       <div class="metric-card">
@@ -638,9 +791,19 @@ function renderManhours(c, month) {
         <div class="metric-sub">person-days absent${absPct !== null ? ` · <strong>${(absPct*100).toFixed(2)}%</strong> of planned days` : ''}</div>
       </div>
       <div class="metric-card">
+        <div class="metric-label">Planned Person-Days</div>
+        <div class="metric-value">${displayedPersonDays > 0 ? fmtN(displayedPersonDays,1) : '—'}</div>
+        <div class="metric-sub">${totPersonDays > 0 ? 'Working days x manpower' : 'Derived from planned regular hours'}</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Avg Manpower / Days</div>
+        <div class="metric-value">${avgManpower !== null ? fmtN(avgManpower,1) : '—'}</div>
+        <div class="metric-sub">${avgWorkdays !== null ? `${fmtN(avgWorkdays,1)} avg working days` : 'No working-days data'}</div>
+      </div>
+      <div class="metric-card">
         <div class="metric-label">Total Manhours Worked</div>
         <div class="metric-value">${fmtN(totAR+totAOT,0)}</div>
-        <div class="metric-sub">Reg + OT actual</div>
+        <div class="metric-sub">Reg + OT actual${totalMhUtil !== null ? ` · <strong>${(totalMhUtil*100).toFixed(2)}%</strong> total utilization` : ''}</div>
       </div>
     </div>
     <div class="card section-gap">
@@ -655,15 +818,18 @@ function renderManhours(c, month) {
       <div class="card-title" style="margin-bottom:14px">Quarterly Manhours Summary</div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Quarter</th><th>Months</th><th>Planned Reg</th><th>Actual Reg</th><th>Reg Util%</th><th>Planned OT</th><th>Actual OT</th><th>OT Util%</th><th>Absenteeism</th></tr></thead>
+          <thead><tr><th>Quarter</th><th>Months</th><th>Person-Days</th><th>Planned Reg</th><th>Actual Reg</th><th>Reg Util%</th><th>Planned OT</th><th>Actual OT</th><th>OT Util%</th><th>Absenteeism</th><th>Absent %</th></tr></thead>
           <tbody>
             ${mhQKeys.map(k => {
               const q = mhByQuarter[k];
               const ru = calcRegHrsUtil(q.ar, q.pr);
               const ou = calcOTUtil(q.aot, q.pot);
+              const personDays = q.personDays > 0 ? q.personDays : (q.pr > 0 ? q.pr / 8 : null);
+              const absRate = personDays > 0 && q.abs != null ? q.abs / personDays : null;
               return `<tr>
                 <td><strong>${k}</strong></td>
                 <td style="color:var(--gray-500);font-size:12px">${q.months.map(fmtMonthLabel).join(', ')}</td>
+                <td class="td-number">${personDays !== null ? fmtN(personDays,1) : '—'}</td>
                 <td class="td-number">${fmtN(q.pr,0)}</td>
                 <td class="td-number">${fmtN(q.ar,1)}</td>
                 <td class="td-number"><strong class="${ru&&ru>=0.9?'td-green':ru&&ru<0.8?'td-red':''}">${ru!==null?(ru*100).toFixed(2)+'%':'—'}</strong></td>
@@ -671,6 +837,7 @@ function renderManhours(c, month) {
                 <td class="td-number">${fmtN(q.aot,1)}</td>
                 <td class="td-number"><strong>${ou!==null?(ou*100).toFixed(2)+'%':'—'}</strong></td>
                 <td class="td-number">${fmtN(q.abs,0)}</td>
+                <td class="td-number">${absRate!==null?(absRate*100).toFixed(2)+'%':'—'}</td>
               </tr>`;
             }).join('')}
           </tbody>
@@ -681,24 +848,32 @@ function renderManhours(c, month) {
       <div class="card-title" style="margin-bottom:14px">Records by Line</div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Month</th><th>Line</th><th>Planned Reg</th><th>Actual Reg</th><th>Reg Util%</th><th>Planned OT</th><th>Actual OT</th><th>OT Util%</th><th>Absent</th><th>Absent %</th></tr></thead>
+          <thead><tr><th>Month</th><th>Line</th><th>Working Days</th><th>Manpower</th><th>Person-Days</th><th>Planned Reg</th><th>Actual Reg</th><th>Reg Util%</th><th>Planned OT</th><th>Actual OT</th><th>OT Util%</th><th>Total Util%</th><th>Absent</th><th>Absent %</th></tr></thead>
           <tbody>
             ${rows.length ? rows.map(r=>{
               const ru=calcRegHrsUtil(r.actual_reg,r.planned_reg), ou=calcOTUtil(r.actual_ot,r.planned_ot);
-              const rowAbsPct = (r.planned_reg > 0 && r.absenteeism != null) ? r.absenteeism / (r.planned_reg / 8) : null;
+              const rowPersonDays = r.person_days ?? calcPersonDays(r.working_days, r.manpower);
+              const rowAbsPct = rowPersonDays > 0 && r.absenteeism != null
+                ? r.absenteeism / rowPersonDays
+                : calcAbsenteeismRate(r.absenteeism, r.working_days, r.manpower, r.planned_reg);
+              const totalUtil = calcTotalManhoursUtil(r.actual_reg, r.actual_ot, r.planned_reg, r.planned_ot);
               return `<tr>
                 <td>${fmtMonthLabel(r.month)}</td>
                 <td>${r.line||'—'}</td>
+                <td class="td-number">${r.working_days!=null?fmtN(r.working_days,1):'—'}</td>
+                <td class="td-number">${r.manpower!=null?fmtN(r.manpower,1):'—'}</td>
+                <td class="td-number">${rowPersonDays!==null?fmtN(rowPersonDays,1):'—'}</td>
                 <td class="td-number">${fmtN(r.planned_reg,0)}</td>
                 <td class="td-number">${fmtN(r.actual_reg,1)}</td>
                 <td class="td-number"><strong class="${ru&&ru>=0.9?'td-green':ru&&ru<0.8?'td-red':''}">${ru!==null?(ru*100).toFixed(2)+'%':'—'}</strong></td>
                 <td class="td-number">${fmtN(r.planned_ot,0)}</td>
                 <td class="td-number">${fmtN(r.actual_ot,1)}</td>
                 <td class="td-number"><strong>${ou!==null?(ou*100).toFixed(2)+'%':'—'}</strong></td>
+                <td class="td-number"><strong>${totalUtil!==null?(totalUtil*100).toFixed(2)+'%':'—'}</strong></td>
                 <td class="td-number">${r.absenteeism!=null?fmtN(r.absenteeism,1):'—'}</td>
                 <td class="td-number">${rowAbsPct!==null?((rowAbsPct*100).toFixed(2)+'%'):'—'}</td>
               </tr>`;
-            }).join('') : '<tr><td colspan="9"><div class="empty"><p>No manhours data yet.</p></div></td></tr>'}
+            }).join('') : '<tr><td colspan="14"><div class="empty"><p>No manhours data yet.</p></div></td></tr>'}
           </tbody>
         </table>
       </div>

@@ -1,7 +1,8 @@
 import { query, run } from './database.js';
 import { 
   fmtN, fmtMonthLabel, monthOptions, showToast, 
-  val, setVal, parseN, clearForm, calcEfficiency, calcRegHrsUtil, calcOTUtil 
+  val, setVal, parseN, clearForm, calcEfficiency, calcRegHrsUtil, calcOTUtil,
+  calcPlannedRegHours, calcPlannedOTHours, calcPersonDays, getRunrateSummaryRows
 } from './utils.js';
 
 // ── ENTRY: UTILITIES & R&M ─────────────────────────────────────────────────────
@@ -144,27 +145,26 @@ function editProd(m,v){document.getElementById('p_month').value=m;document.getEl
 function renderEntryCapacity(c) {
   const rows = query('SELECT * FROM capacity ORDER BY month DESC, line LIMIT 60');
   const weekRows = query('SELECT * FROM capacity_weekly ORDER BY month DESC, line, week_num ASC, week_label ASC LIMIT 200');
+  const rollupRows = getRunrateSummaryRows();
 
   // Collect existing lines for the dropdown helper
-  const existingLines = [...new Set(rows.map(r => r.line))].sort();
+  const existingLines = [...new Set([
+    ...rows.map(r => r.line),
+    ...weekRows.map(r => r.line)
+  ].filter(Boolean))].sort();
 
   c.innerHTML = `
     <div class="page-header">
-      <h1>Capacity & Efficiency Entry</h1>
-      <p>Enter monthly totals and optional weekly breakdown per production line</p>
-    </div>
-
-    <div class="tabs" id="cap-tabs">
-      <button class="tab active" onclick="switchCapTab('monthly', this)">Monthly Totals</button>
-      <button class="tab" onclick="switchCapTab('weekly', this)">Weekly Breakdown</button>
+      <h1>Runrate Efficiency Entry</h1>
+      <p>Enter weekly capacity and actual output by line</p>
     </div>
 
     <!-- ── MONTHLY ── -->
-    <div id="cap-panel-monthly">
+    <div id="cap-panel-monthly" style="display:none">
       <div class="card section-gap">
-        <div class="info-block"><strong>Formula:</strong> Efficiency = Actual Output ÷ Capacity × 100%</div>
+        <div class="info-block"><strong>Formula:</strong> Efficiency = Actual Output / Capacity x 100%</div>
         <div class="form-section">
-          <div class="form-section-title">Add / Update Monthly Record</div>
+          <div class="form-section-title">Add / Update Manual Monthly Total</div>
           <div class="form-grid">
             <div class="form-group">
               <label>Month *</label>
@@ -187,15 +187,15 @@ function renderEntryCapacity(c) {
           </div>
           <div id="c_preview" style="margin-top:12px;font-size:13px;color:var(--gray-500)"></div>
           <div style="margin-top:16px;display:flex;gap:10px">
-            <button class="btn btn-primary" onclick="saveCapacity()">Save Monthly Record</button>
+            <button class="btn btn-primary" onclick="saveCapacity()">Save Manual Monthly Total</button>
             <button class="btn btn-secondary" onclick="clearForm(['c_month','c_line','c_cap','c_act'])">Clear</button>
           </div>
         </div>
       </div>
       <div class="card">
         <div class="records-header">
-          <div class="card-title">Monthly Records</div>
-          ${rows.length ? `<button class="btn btn-sm btn-danger" onclick="clearExistingRecords('capacity','Capacity records')">Clear Records</button>` : ''}
+          <div class="card-title">Manual Monthly Records</div>
+          ${rows.length ? `<button class="btn btn-sm btn-danger" onclick="clearExistingRecords('capacity','Manual runrate records')">Clear Manual Records</button>` : ''}
         </div>
         <div class="table-wrap">
           <table>
@@ -221,14 +221,13 @@ function renderEntryCapacity(c) {
     </div>
 
     <!-- ── WEEKLY ── -->
-    <div id="cap-panel-weekly" style="display:none">
+    <div id="cap-panel-weekly">
       <div class="card section-gap">
         <div class="info-block">
-          <strong>Weekly entry:</strong> Enter individual week rows that roll up into the monthly total.
-          Week label format should match: <code>APR WEEK 14</code>, <code>MAY WK18</code>, etc.
+          <strong>Formula:</strong> Efficiency = Actual Output / Capacity x 100%
         </div>
         <div class="form-section">
-          <div class="form-section-title">Add / Update Weekly Record</div>
+          <div class="form-section-title">Add / Update Weekly Runrate</div>
           <div class="form-grid">
             <div class="form-group">
               <label>Month *</label>
@@ -260,15 +259,36 @@ function renderEntryCapacity(c) {
           </div>
           <div id="cw_preview" style="margin-top:12px;font-size:13px;color:var(--gray-500)"></div>
           <div style="margin-top:16px;display:flex;gap:10px">
-            <button class="btn btn-primary" onclick="saveWeeklyCapacity()">Save Weekly Record</button>
+            <button class="btn btn-primary" onclick="saveWeeklyCapacity()">Save Weekly Runrate</button>
             <button class="btn btn-secondary" onclick="clearForm(['cw_month','cw_line','cw_wlabel','cw_wnum','cw_cap','cw_act'])">Clear</button>
           </div>
         </div>
       </div>
+      <div class="card section-gap">
+        <div class="card-title" style="margin-bottom:14px">Monthly Rollup</div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Month</th><th>Line</th><th>Capacity</th><th>Actual</th><th>Efficiency</th><th>Weekly Rows</th></tr></thead>
+            <tbody>
+              ${rollupRows.length ? rollupRows.map(r => {
+                const eff = calcEfficiency(r.capacity, r.actual_output);
+                return `<tr>
+                  <td>${fmtMonthLabel(r.month)}</td>
+                  <td><strong>${r.line}</strong></td>
+                  <td class="td-number">${fmtN(r.capacity, 0)}</td>
+                  <td class="td-number">${fmtN(r.actual_output, 0)}</td>
+                  <td class="td-number"><strong>${eff !== null ? (eff * 100).toFixed(2) + '%' : '—'}</strong></td>
+                  <td class="td-number">${r.weekly_count ? fmtN(r.weekly_count, 0) : 'manual total'}</td>
+                </tr>`;
+              }).join('') : '<tr><td colspan="6"><div class="empty"><p>No runrate data yet.</p></div></td></tr>'}
+            </tbody>
+          </table>
+        </div>
+      </div>
       <div class="card">
         <div class="records-header">
-          <div class="card-title">Weekly Records</div>
-          ${weekRows.length ? `<button class="btn btn-sm btn-danger" onclick="clearWeeklyRecords()">Clear All Weekly</button>` : ''}
+          <div class="card-title">Weekly Runrate Records</div>
+          ${weekRows.length || rows.length ? `<button class="btn btn-sm btn-danger" onclick="clearRunrateRecords()">Clear Runrate Data</button>` : ''}
         </div>
         <div class="table-wrap">
           <table>
@@ -327,7 +347,7 @@ function saveCapacity() {
   run(`INSERT INTO capacity (month,line,capacity,actual_output) VALUES (?,?,?,?)
     ON CONFLICT(month,line) DO UPDATE SET capacity=excluded.capacity, actual_output=excluded.actual_output`,
     [month, line, cap, act]);
-  showToast('Monthly record saved!'); navigateTo('entry-capacity');
+  showToast('Manual monthly runrate saved!'); navigateTo('entry-capacity');
 }
 
 function saveWeeklyCapacity() {
@@ -341,7 +361,7 @@ function saveWeeklyCapacity() {
   run(`INSERT INTO capacity_weekly (month,line,week_label,week_num,capacity,actual_output) VALUES (?,?,?,?,?,?)
     ON CONFLICT(month,line,week_label) DO UPDATE SET week_num=excluded.week_num, capacity=excluded.capacity, actual_output=excluded.actual_output`,
     [month, line, wlabel, wnum, cap, act]);
-  showToast('Weekly record saved!'); navigateTo('entry-capacity');
+  showToast('Weekly runrate saved!'); navigateTo('entry-capacity');
 }
 
 function editCap(m, l, c, a) {
@@ -357,44 +377,56 @@ function editWeeklyCap(id) {
   // Switch to weekly tab
   document.getElementById('cap-panel-monthly').style.display = 'none';
   document.getElementById('cap-panel-weekly').style.display  = '';
-  document.querySelectorAll('#cap-tabs .tab').forEach((t, i) => t.classList.toggle('active', i === 1));
   setVal('cw_month', r.month); setVal('cw_line', r.line);
   setVal('cw_wlabel', r.week_label); setVal('cw_wnum', r.week_num);
   setVal('cw_cap', r.capacity); setVal('cw_act', r.actual_output);
 }
 
 function deleteCapacity(month, line) {
-  if (!confirm(`Delete monthly capacity record for ${line} in ${fmtMonthLabel(month)}?`)) return;
+  if (!confirm(`Delete manual monthly runrate record for ${line} in ${fmtMonthLabel(month)}?`)) return;
   run(`DELETE FROM capacity WHERE month=? AND line=?`, [month, line]);
   showToast('Deleted.', 'error'); navigateTo('entry-capacity');
 }
 
 function deleteWeeklyCapacity(id) {
-  if (!confirm('Delete this weekly record?')) return;
+  if (!confirm('Delete this weekly runrate record?')) return;
   run(`DELETE FROM capacity_weekly WHERE id=?`, [id]);
   showToast('Deleted.', 'error'); navigateTo('entry-capacity');
 }
 
 function clearWeeklyRecords() {
-  if (!confirm('Clear ALL weekly capacity records?')) return;
+  if (!confirm('Clear ALL weekly runrate records?')) return;
   run(`DELETE FROM capacity_weekly`);
   showToast('Weekly records cleared.', 'error'); navigateTo('entry-capacity');
+}
+
+function clearRunrateRecords() {
+  if (!confirm('Clear all runrate efficiency data? This removes weekly rows and manual monthly totals.')) return;
+  run(`DELETE FROM capacity_weekly`);
+  run(`DELETE FROM capacity`);
+  showToast('Runrate efficiency data cleared.', 'error'); navigateTo('entry-capacity');
 }
  
 // ── ENTRY: MANHOURS ────────────────────────────────────────────────────────────
 function renderEntryManhours(c) {
-  const rows = query('SELECT * FROM manhours ORDER BY month DESC, line LIMIT 60');
+  const rows = query('SELECT * FROM manhours ORDER BY month DESC, line LIMIT 200');
+  const legacyWeeklyCount = query('SELECT COUNT(*) as count FROM manhours_weekly')[0]?.count || 0;
+  const existingLines = [...new Set([
+    ...rows.map(r => r.line),
+    ...query('SELECT DISTINCT line FROM capacity').map(r => r.line),
+    ...query('SELECT DISTINCT line FROM capacity_weekly').map(r => r.line)
+  ].filter(Boolean))].sort();
   c.innerHTML = `
     <div class="page-header">
       <h1>Manhours Entry</h1>
-      <p>Enter planned and actual regular and overtime hours per line per month</p>
+      <p>Enter monthly working days, manpower, actual hours, and absenteeism by line</p>
     </div>
     <div class="card section-gap">
       <div class="info-block">
-        <strong>Formulas:</strong> Reg Utilization = Actual Reg Hrs ÷ Planned Reg Hrs × 100% &nbsp;|&nbsp; OT Utilization = Actual OT Hrs ÷ Planned OT Hrs × 100%
+        <strong>Formula chain:</strong> Person-Days = Working Days x Manpower &nbsp;|&nbsp; Planned Reg = Person-Days x 8 hrs &nbsp;|&nbsp; Planned OT = Person-Days x 4 hrs
       </div>
       <div class="form-section">
-        <div class="form-section-title">Add / Update Record</div>
+        <div class="form-section-title">Add / Update Monthly Manhours</div>
         <div class="form-grid">
           <div class="form-group">
             <label>Month *</label>
@@ -402,20 +434,23 @@ function renderEntryManhours(c) {
           </div>
           <div class="form-group">
             <label>Line / Group</label>
-            <input type="text" id="mh_line" placeholder="e.g. Line 4 ES">
+            <input type="text" id="mh_line" placeholder="e.g. Line 4 ES" list="mh_line_list">
+            <datalist id="mh_line_list">${existingLines.map(l => `<option value="${l}">`).join('')}</datalist>
             <span class="form-hint">Leave blank for plant-wide</span>
           </div>
           <div class="form-group">
-            <label>Planned Regular Hours</label>
-            <input type="number" id="mh_pr" placeholder="e.g. 6480" step="0.01">
+            <label>Working Days *</label>
+            <input type="number" id="mh_workdays" placeholder="e.g. 22" step="0.5" oninput="previewManhoursPlan()">
+            <span class="form-hint">Working days for this month</span>
+          </div>
+          <div class="form-group">
+            <label>Manpower *</label>
+            <input type="number" id="mh_manpower" placeholder="e.g. 45" step="0.1" oninput="previewManhoursPlan()">
+            <span class="form-hint">Average assigned manpower for this month</span>
           </div>
           <div class="form-group">
             <label>Actual Regular Hours</label>
             <input type="number" id="mh_ar" placeholder="e.g. 5726.94" step="0.01">
-          </div>
-          <div class="form-group">
-            <label>Planned OT Hours</label>
-            <input type="number" id="mh_pot" placeholder="e.g. 3240" step="0.01">
           </div>
           <div class="form-group">
             <label>Actual OT Hours</label>
@@ -426,28 +461,34 @@ function renderEntryManhours(c) {
             <input type="number" id="mh_abs" placeholder="e.g. 24" step="0.01">
           </div>
         </div>
+        <div id="mh_plan_preview" style="margin-top:12px;font-size:13px;color:var(--gray-500)"></div>
         <div style="margin-top:16px;display:flex;gap:10px">
           <button class="btn btn-primary" onclick="saveManhours()">Save Record</button>
-          <button class="btn btn-secondary" onclick="clearForm(['mh_month','mh_line','mh_pr','mh_ar','mh_pot','mh_aot','mh_abs'])">Clear</button>
+          <button class="btn btn-secondary" onclick="clearManhoursForm()">Clear</button>
         </div>
       </div>
     </div>
     <div class="card">
       <div class="records-header">
-        <div class="card-title">Existing Records</div>
-        ${rows.length ? `<button class="btn btn-sm btn-danger" onclick="clearExistingRecords('manhours','Manhours records')">Clear Records</button>` : ''}
+        <div class="card-title">Monthly Manhours Records</div>
+        ${rows.length || legacyWeeklyCount ? `<button class="btn btn-sm btn-danger" onclick="clearManhoursRecords()">Clear Records</button>` : ''}
       </div>
+      ${legacyWeeklyCount ? `<div class="info-block" style="margin-bottom:12px"><strong>Legacy cleanup:</strong> ${fmtN(legacyWeeklyCount,0)} old weekly manhours rows are no longer used. Clear records will remove them.</div>` : ''}
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Month</th><th>Line</th><th>Plan Reg</th><th>Act Reg</th><th>Reg Util%</th><th>Plan OT</th><th>Act OT</th><th>OT Util%</th><th>Absent</th><th>Actions</th></tr></thead>
+          <thead><tr><th>Month</th><th>Line</th><th>Working Days</th><th>Manpower</th><th>Plan Reg</th><th>Act Reg</th><th>Reg Util%</th><th>Plan OT</th><th>Act OT</th><th>OT Util%</th><th>Absent</th><th>Actions</th></tr></thead>
           <tbody>
             ${rows.length ? rows.map(r=>{
-              const ru=calcRegHrsUtil(r.actual_reg,r.planned_reg), ou=calcOTUtil(r.actual_ot,r.planned_ot);
+              const plannedReg = calcPlannedRegHours(r.working_days, r.manpower) ?? r.planned_reg;
+              const plannedOT = calcPlannedOTHours(r.working_days, r.manpower) ?? r.planned_ot;
+              const ru=calcRegHrsUtil(r.actual_reg,plannedReg), ou=calcOTUtil(r.actual_ot,plannedOT);
               return `<tr>
                 <td>${fmtMonthLabel(r.month)}</td><td>${r.line||'—'}</td>
-                <td class="td-number">${fmtN(r.planned_reg,0)}</td><td class="td-number">${fmtN(r.actual_reg,1)}</td>
+                <td class="td-number">${r.working_days != null ? fmtN(r.working_days,1) : '—'}</td>
+                <td class="td-number">${r.manpower != null ? fmtN(r.manpower,1) : '—'}</td>
+                <td class="td-number">${fmtN(plannedReg,0)}</td><td class="td-number">${fmtN(r.actual_reg,1)}</td>
                 <td class="td-number"><strong>${ru!==null?(ru*100).toFixed(2)+'%':'—'}</strong></td>
-                <td class="td-number">${fmtN(r.planned_ot,0)}</td><td class="td-number">${fmtN(r.actual_ot,1)}</td>
+                <td class="td-number">${fmtN(plannedOT,0)}</td><td class="td-number">${fmtN(r.actual_ot,1)}</td>
                 <td class="td-number"><strong>${ou!==null?(ou*100).toFixed(2)+'%':'—'}</strong></td>
                 <td class="td-number">${r.absenteeism!=null?fmtN(r.absenteeism,1):'—'}</td>
                 <td><div class="record-actions">
@@ -455,33 +496,94 @@ function renderEntryManhours(c) {
                   <button class="btn btn-sm btn-danger" onclick="deleteMH(${r.id})">Delete</button>
                 </div></td>
               </tr>`;
-            }).join('') : '<tr><td colspan="10"><div class="empty"><p>No records yet.</p></div></td></tr>'}
+            }).join('') : '<tr><td colspan="12"><div class="empty"><p>No monthly manhours records yet.</p></div></td></tr>'}
           </tbody>
         </table>
       </div>
     </div>
   `;
 }
+function previewManhoursPlan() {
+  const workdays = parseN('mh_workdays');
+  const manpower = parseN('mh_manpower');
+  const prev = document.getElementById('mh_plan_preview');
+  if (!prev) return;
+  const plannedReg = calcPlannedRegHours(workdays, manpower);
+  const plannedOT = calcPlannedOTHours(workdays, manpower);
+  const personDays = calcPersonDays(workdays, manpower);
+  if (plannedReg !== null && plannedOT !== null && personDays !== null) {
+    prev.innerHTML = `Preview: <strong>${fmtN(plannedReg,0)}</strong> planned regular hrs, <strong>${fmtN(plannedOT,0)}</strong> planned OT hrs, <strong>${fmtN(personDays,1)}</strong> person-days`;
+  } else {
+    prev.innerHTML = '';
+  }
+}
+function clearManhoursForm() {
+  clearForm(['mh_month','mh_line','mh_workdays','mh_manpower','mh_ar','mh_aot','mh_abs']);
+  previewManhoursPlan();
+}
 function saveManhours(){
   const month=val('mh_month'), line=val('mh_line').trim();
-  const pr=parseN('mh_pr'),ar=parseN('mh_ar'),pot=parseN('mh_pot'),aot=parseN('mh_aot'),abs=parseN('mh_abs');
+  const workdays = parseN('mh_workdays');
+  const manpower = parseN('mh_manpower');
+  const ar = parseN('mh_ar');
+  const aot = parseN('mh_aot');
+  const abs = parseN('mh_abs');
+  
   if(!month){showToast('Month is required','error');return;}
-  const lineKey = line || '';   // always string, never null
-  run(`INSERT INTO manhours (month,line,planned_reg,actual_reg,planned_ot,actual_ot,absenteeism) VALUES (?,?,?,?,?,?,?)
-    ON CONFLICT(month,line) DO UPDATE SET planned_reg=excluded.planned_reg,actual_reg=excluded.actual_reg,planned_ot=excluded.planned_ot,actual_ot=excluded.actual_ot,absenteeism=excluded.absenteeism`,
-    [month, lineKey, pr, ar, pot, aot, abs]);
-  showToast('Manhours record saved!');navigateTo('entry-manhours');
+  if (workdays == null || manpower == null) {
+    showToast('Working days and manpower are required to compute planned hours.', 'error');
+    return;
+  }
+  
+  const pr = calcPlannedRegHours(workdays, manpower);
+  const pot = calcPlannedOTHours(workdays, manpower);
+  if (pr === null || pot === null) {
+    showToast('Working days and manpower must be greater than zero.', 'error');
+    return;
+  }
+
+  if ([ar, aot, abs].every(v => v == null)) {
+    showToast('Enter at least one actual manhours or absenteeism value.', 'error');
+    return;
+  }
+  
+  const lineKey = line || '';
+  run(`INSERT INTO manhours (month,line,working_days,manpower,planned_reg,actual_reg,planned_ot,actual_ot,absenteeism)
+       VALUES (?,?,?,?,?,?,?,?,?)
+       ON CONFLICT(month,line) DO UPDATE SET
+        working_days=excluded.working_days,
+        manpower=excluded.manpower,
+        planned_reg=excluded.planned_reg,
+        actual_reg=excluded.actual_reg,
+        planned_ot=excluded.planned_ot,
+        actual_ot=excluded.actual_ot,
+        absenteeism=excluded.absenteeism`,
+    [month, lineKey, workdays, manpower, pr, ar, pot, aot, abs]);
+  run(`DELETE FROM manhours_weekly WHERE month=? AND line=?`, [month, lineKey]);
+  showToast('Monthly manhours record saved!'); navigateTo('entry-manhours');
 }
 function editMH(id){
   const r=query(`SELECT * FROM manhours WHERE id=?`,[id])[0];
   if(!r)return;
-  setVal('mh_month',r.month);setVal('mh_line',r.line||'');setVal('mh_pr',r.planned_reg);
-  setVal('mh_ar',r.actual_reg);setVal('mh_pot',r.planned_ot);setVal('mh_aot',r.actual_ot);setVal('mh_abs',r.absenteeism);
+  setVal('mh_month',r.month);
+  setVal('mh_line',r.line||'');
+  setVal('mh_workdays',r.working_days);
+  setVal('mh_manpower',r.manpower);
+  setVal('mh_ar',r.actual_reg);
+  setVal('mh_aot',r.actual_ot);
+  setVal('mh_abs',r.absenteeism);
+  previewManhoursPlan();
 }
 function deleteMH(id){
-  if(!confirm('Delete this manhours record?'))return;
+  if(!confirm('Delete this monthly manhours record?'))return;
   run(`DELETE FROM manhours WHERE id=?`,[id]);
   showToast('Deleted.','error');navigateTo('entry-manhours');
+}
+function clearManhoursRecords() {
+  if (!confirm('Clear all monthly manhours records and old weekly manhours rows?')) return;
+  run(`DELETE FROM manhours`);
+  run(`DELETE FROM manhours_weekly`);
+  showToast('Manhours records cleared.','error');navigateTo('entry-manhours');
 }
  
 // ── ENTRY: LOSS ────────────────────────────────────────────────────────────────
@@ -653,9 +755,9 @@ export {
   renderEntryUtilities, saveUtility, editUtility,
   renderEntryProduction, saveProduction, editProd,
   renderEntryCapacity, saveCapacity, editCap, deleteCapacity,
-  saveWeeklyCapacity, editWeeklyCap, deleteWeeklyCapacity, clearWeeklyRecords,
+  saveWeeklyCapacity, editWeeklyCap, deleteWeeklyCapacity, clearWeeklyRecords, clearRunrateRecords,
   previewEff, previewWeekEff,
-  renderEntryManhours, saveManhours, editMH, deleteMH,
+  renderEntryManhours, saveManhours, editMH, deleteMH, clearManhoursRecords, previewManhoursPlan, clearManhoursForm,
   renderEntryLoss, saveLoss, editLoss, deleteLoss,
   renderEntryBudget, saveBudget, editBudget
 };
