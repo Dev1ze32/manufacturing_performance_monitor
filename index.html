@@ -7,6 +7,7 @@
   
   <script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.2/sql-wasm.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   
   <link rel="stylesheet" href="css/dashboard.css">
 </head>
@@ -30,6 +31,7 @@
       </div>
       <div class="nav-section">
         <div class="nav-label">Data Entry</div>
+        <button class="nav-item" data-page="import" onclick="navigateTo(this.dataset.page)">Import Excel</button>
         <button class="nav-item" data-page="entry-utilities" onclick="navigateTo(this.dataset.page)">Utilities & R&M</button>
         <button class="nav-item" data-page="entry-production" onclick="navigateTo(this.dataset.page)">Production Volume</button>
         <button class="nav-item" data-page="entry-capacity" onclick="navigateTo(this.dataset.page)">Capacity & Efficiency</button>
@@ -53,6 +55,7 @@
     <div id="page-manhours" style="display:none"></div>
     <div id="page-loss" style="display:none"></div>
     <div id="page-budget" style="display:none"></div>
+    <div id="page-import" style="display:none"></div>
     <div id="page-entry-utilities" style="display:none"></div>
     <div id="page-entry-production" style="display:none"></div>
     <div id="page-entry-capacity" style="display:none"></div>

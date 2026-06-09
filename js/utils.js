@@ -32,19 +32,19 @@ export function clearForm(ids){ ids.forEach(id=>setVal(id,'')); }
 export function getGlobalMonth() { return document.getElementById('globalMonth').value; }
 
 export function monthOptions(selected='') {
-  const months = [];
-  let d = new Date(2024, 9);
-  const end = new Date(); end.setFullYear(end.getFullYear() + 2);
-  while (d <= end) {
-    const val = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0');
-    months.push(val);
-    d.setMonth(d.getMonth()+1);
-  }
+  const months = buildMonthRange(getDistinctMonths());
   return months.map(m => `<option value="${m}" ${m===selected?'selected':''}>${fmtMonthLabel(m)}</option>`).join('');
 }
 
 export function getDistinctMonths() {
-  const sets = [ query('SELECT DISTINCT month FROM utilities'), query('SELECT DISTINCT month FROM production'), query('SELECT DISTINCT month FROM capacity') ];
+  const sets = [
+    query('SELECT DISTINCT month FROM utilities'),
+    query('SELECT DISTINCT month FROM production'),
+    query('SELECT DISTINCT month FROM capacity'),
+    query('SELECT DISTINCT month FROM manhours'),
+    query('SELECT DISTINCT month FROM loss'),
+    query('SELECT DISTINCT month FROM budget')
+  ];
   const all = new Set();
   sets.forEach(s => s.forEach(r => all.add(r.month)));
   return [...all].sort();
@@ -53,12 +53,39 @@ export function getDistinctMonths() {
 export function populateMonthFilter() {
   const sel = document.getElementById('globalMonth');
   const allMonths = getDistinctMonths();
-  let d = new Date(2024, 9);
-  const end = new Date(); end.setFullYear(end.getFullYear()+2);
-  const months = [];
-  while (d <= end) { months.push(d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')); d.setMonth(d.getMonth()+1); }
+  const months = buildMonthRange(allMonths);
   sel.innerHTML = '<option value="">All Months</option>' + months.map(m=>`<option value="${m}">${fmtMonthLabel(m)}</option>`).join('');
   if (allMonths.length) sel.value = allMonths[allMonths.length-1];
+}
+
+function buildMonthRange(existingMonths = []) {
+  const validExisting = existingMonths.filter(m => /^\d{4}-\d{2}$/.test(m)).sort();
+  const now = new Date();
+  const defaultStart = '2024-10';
+  const defaultEnd = `${now.getFullYear() + 5}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const start = validExisting.length ? minMonth(defaultStart, validExisting[0]) : defaultStart;
+  const end = validExisting.length ? maxMonth(defaultEnd, validExisting[validExisting.length - 1]) : defaultEnd;
+  const months = [];
+  let d = monthToDate(start);
+  const endDate = monthToDate(end);
+  while (d <= endDate) {
+    months.push(d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'));
+    d.setMonth(d.getMonth() + 1);
+  }
+  return months;
+}
+
+function monthToDate(month) {
+  const [year, monthNo] = month.split('-').map(Number);
+  return new Date(year, monthNo - 1, 1);
+}
+
+function minMonth(a, b) {
+  return a <= b ? a : b;
+}
+
+function maxMonth(a, b) {
+  return a >= b ? a : b;
 }
 
 // CALCULATIONS

@@ -2,6 +2,7 @@ import { initDB, run } from './database.js';
 import { getGlobalMonth, populateMonthFilter, showToast, clearForm, fmtMonthLabel } from './utils.js';
 import * as Dashboards from './dashboard.js';
 import * as Forms from './forms.js';
+import * as Importer from './importer.js';
 
 let currentPage = 'executive';
 
@@ -31,6 +32,7 @@ function renderCurrentPage() {
     case 'manhours': Dashboards.renderManhours(container, m); break;
     case 'loss': Dashboards.renderLoss(container, m); break;
     case 'budget': Dashboards.renderBudget(container, m); break;
+    case 'import': Importer.renderImport(container); break;
     case 'entry-utilities': Forms.renderEntryUtilities(container); break;
     case 'entry-production': Forms.renderEntryProduction(container); break;
     case 'entry-capacity': Forms.renderEntryCapacity(container); break;
@@ -48,10 +50,35 @@ window.deleteRecord = function(table, month) {
   renderCurrentPage();
 };
 
+const clearableEntryTables = new Set(['utilities', 'production', 'capacity', 'manhours', 'loss', 'budget']);
+
+window.clearExistingRecords = function(table, label) {
+  if(!clearableEntryTables.has(table)) {
+    showToast('Cannot clear this record set.', 'error');
+    return;
+  }
+
+  if(!confirm(`Clear all ${label}? This will delete every existing record in this section.`)) return;
+
+  const cleared = run(`DELETE FROM ${table}`);
+  if(!cleared) {
+    showToast(`Could not clear ${label}.`, 'error');
+    return;
+  }
+
+  populateMonthFilter();
+  showToast(`${label} cleared.`, 'error');
+  renderCurrentPage();
+};
+
 window.clearForm = clearForm;
 
 // Map form handlers to the window object so inline HTML functions keep working seamlessly
 Object.entries(Forms).forEach(([name, func]) => {
+  window[name] = func;
+});
+
+Object.entries(Importer).forEach(([name, func]) => {
   window[name] = func;
 });
 

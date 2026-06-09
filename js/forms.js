@@ -39,7 +39,10 @@ function renderEntryUtilities(c) {
       </div>
     </div>
     <div class="card">
-      <div class="card-title" style="margin-bottom:14px">Existing Records</div>
+      <div class="records-header">
+        <div class="card-title">Existing Records</div>
+        ${rows.length ? `<button class="btn btn-sm btn-danger" onclick="clearExistingRecords('utilities','Utilities & R&M records')">Clear Records</button>` : ''}
+      </div>
       <div class="table-wrap">
         <table>
           <thead><tr><th>Month</th><th>Utility Cost (₱)</th><th>R&M Cost (₱)</th><th>Actions</th></tr></thead>
@@ -107,7 +110,10 @@ function renderEntryProduction(c) {
       </div>
     </div>
     <div class="card">
-      <div class="card-title" style="margin-bottom:14px">Existing Records</div>
+      <div class="records-header">
+        <div class="card-title">Existing Records</div>
+        ${rows.length ? `<button class="btn btn-sm btn-danger" onclick="clearExistingRecords('production','Production records')">Clear Records</button>` : ''}
+      </div>
       <div class="table-wrap">
         <table>
           <thead><tr><th>Month</th><th>Volume (MT)</th><th>Actions</th></tr></thead>
@@ -173,7 +179,10 @@ function renderEntryCapacity(c) {
       </div>
     </div>
     <div class="card">
-      <div class="card-title" style="margin-bottom:14px">Existing Records</div>
+      <div class="records-header">
+        <div class="card-title">Existing Records</div>
+        ${rows.length ? `<button class="btn btn-sm btn-danger" onclick="clearExistingRecords('capacity','Capacity records')">Clear Records</button>` : ''}
+      </div>
       <div class="table-wrap">
         <table>
           <thead><tr><th>Month</th><th>Line</th><th>Capacity</th><th>Actual Output</th><th>Efficiency</th><th>Actions</th></tr></thead>
@@ -275,7 +284,10 @@ function renderEntryManhours(c) {
       </div>
     </div>
     <div class="card">
-      <div class="card-title" style="margin-bottom:14px">Existing Records</div>
+      <div class="records-header">
+        <div class="card-title">Existing Records</div>
+        ${rows.length ? `<button class="btn btn-sm btn-danger" onclick="clearExistingRecords('manhours','Manhours records')">Clear Records</button>` : ''}
+      </div>
       <div class="table-wrap">
         <table>
           <thead><tr><th>Month</th><th>Line</th><th>Plan Reg</th><th>Act Reg</th><th>Reg Util%</th><th>Plan OT</th><th>Act OT</th><th>OT Util%</th><th>Absent</th><th>Actions</th></tr></thead>
@@ -370,7 +382,10 @@ function renderEntryLoss(c) {
       </div>
     </div>
     <div class="card">
-      <div class="card-title" style="margin-bottom:14px">Existing Records</div>
+      <div class="records-header">
+        <div class="card-title">Existing Records</div>
+        ${rows.length ? `<button class="btn btn-sm btn-danger" onclick="clearExistingRecords('loss','Loss records')">Clear Records</button>` : ''}
+      </div>
       <div class="table-wrap">
         <table>
           <thead><tr><th>Month</th><th>Line</th><th>Runrate Loss</th><th>Absenteeism Loss</th><th>Manhours Loss</th><th>Total</th><th>Runrate %</th><th>Actions</th></tr></thead>
@@ -449,7 +464,10 @@ function renderEntryBudget(c) {
       </div>
     </div>
     <div class="card">
-      <div class="card-title" style="margin-bottom:14px">Existing Budget Records</div>
+      <div class="records-header">
+        <div class="card-title">Existing Budget Records</div>
+        ${rows.length ? `<button class="btn btn-sm btn-danger" onclick="clearExistingRecords('budget','Budget records')">Clear Records</button>` : ''}
+      </div>
       <div class="table-wrap">
         <table>
           <thead><tr><th>Month</th><th>Utility Budget</th><th>R&M Budget</th><th>Volume Budget (MT)</th><th>Actions</th></tr></thead>

@@ -105,15 +105,21 @@ function renderExecutive(c, month) {
       data: {
         labels: trendLabels,
         datasets: [
-          { label: 'Util/Kg', data: trendUtil, borderColor: '#1a56db', backgroundColor: 'rgba(26,86,219,0.07)', tension: 0.3, pointRadius: 3, fill: true },
-          { label: 'R&M/Kg', data: trendRM, borderColor: '#d97706', backgroundColor: 'rgba(217,119,6,0.07)', tension: 0.3, pointRadius: 3, fill: true },
-          { label: 'Engg/Kg', data: trendEngg, borderColor: '#7c3aed', backgroundColor: 'transparent', tension: 0.3, pointRadius: 3, borderDash: [4,3] }
+          { label: 'Util/Kg', data: trendUtil, borderColor: '#3b82f6', borderWidth: 2, tension: 0.4, pointRadius: 0, pointHoverRadius: 5, fill: false },
+          { label: 'R&M/Kg', data: trendRM, borderColor: '#f59e0b', borderWidth: 2, tension: 0.4, pointRadius: 0, pointHoverRadius: 5, fill: false },
+          { label: 'Engg/Kg', data: trendEngg, borderColor: '#8b5cf6', borderWidth: 2, borderDash: [4,4], tension: 0.4, pointRadius: 0, pointHoverRadius: 5, fill: false }
         ]
       },
       options: {
         responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { labels: { font: {size:11}, boxWidth:10 } } },
-        scales: { y: { grid: { color: '#f1f5f9' }, ticks: { font: {size:11} } }, x: { grid: { display: false }, ticks: { font: {size:11}, maxRotation: 45 } } }
+        interaction: { mode: 'index', intersect: false }, // Syncs tooltips vertically
+        plugins: { 
+          legend: { position: 'top', labels: { usePointStyle: true, boxWidth: 8, font: {size: 12} } } 
+        },
+        scales: { 
+          y: { border: { display: false }, grid: { color: '#f1f5f9', drawTicks: false } }, 
+          x: { border: { display: false }, grid: { display: false } } 
+        }
       }
     });
   }
@@ -126,13 +132,19 @@ function renderExecutive(c, month) {
       type: 'doughnut',
       data: {
         labels: ['Utilities', 'R&M'],
-        datasets: [{ data: [kpis.util_cost, kpis.rm_cost], backgroundColor: ['#1a56db','#d97706'], borderWidth: 2, borderColor: '#fff' }]
+        datasets: [{ 
+          data: [kpis.util_cost, kpis.rm_cost], 
+          backgroundColor: ['#3b82f6', '#f59e0b'], 
+          borderWidth: 0, // Removes the harsh white separator
+          hoverOffset: 4  // Pops out slightly when hovered
+        }]
       },
       options: {
         responsive: true, maintainAspectRatio: false,
+        cutout: '75%', // Makes the ring thinner and cleaner
         plugins: {
-          legend: { labels: { font: {size:11}, boxWidth:10 } },
-          tooltip: { callbacks: { label: ctx => `₱ ${fmtN(ctx.parsed,2)}` } }
+          legend: { position: 'bottom', labels: { usePointStyle: true, padding: 20 } },
+          tooltip: { callbacks: { label: ctx => `₱ ${fmtN(ctx.parsed, 2)}` } }
         }
       }
     });
@@ -562,14 +574,17 @@ function renderBudget(c, month) {
     const labels=rows.map(r=>fmtMonthLabel(r.month)).reverse();
     const ubud=rows.map(r=>r.utility_budget).reverse(), uact=rows.map(r=>r.utility_cost).reverse();
     const rbud=rows.map(r=>r.rm_budget).reverse(), ract=rows.map(r=>r.rm_cost).reverse();
-    charts['budgetChart']=new Chart(ctx,{
-      type:'bar',
-      data:{labels,datasets:[
-        {label:'Util Budget',data:ubud,backgroundColor:'rgba(26,86,219,0.3)',borderColor:'#1a56db',borderWidth:1.5},
-        {label:'Util Actual',data:uact,backgroundColor:'rgba(26,86,219,0.7)'},
-        {label:'R&M Budget',data:rbud,backgroundColor:'rgba(217,119,6,0.3)',borderColor:'#d97706',borderWidth:1.5},
-        {label:'R&M Actual',data:ract,backgroundColor:'rgba(217,119,6,0.7)'}
-      ]},
+    charts['budgetChart'] = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels, 
+        datasets: [
+          { label: 'Util Budget', data: ubud, backgroundColor: '#bfdbfe', borderRadius: 4, barPercentage: 0.6 },
+          { label: 'Util Actual', data: uact, backgroundColor: '#3b82f6', borderRadius: 4, barPercentage: 0.6 },
+          { label: 'R&M Budget', data: rbud, backgroundColor: '#fcd34d', borderRadius: 4, barPercentage: 0.6 },
+          { label: 'R&M Actual', data: ract, backgroundColor: '#f59e0b', borderRadius: 4, barPercentage: 0.6 }
+        ]
+      },
       options:{responsive:true,maintainAspectRatio:false,
         plugins:{legend:{labels:{font:{size:11},boxWidth:10}}},
         scales:{y:{grid:{color:'#f1f5f9'},ticks:{font:{size:11}}},x:{grid:{display:false},ticks:{font:{size:11},maxRotation:45,autoSkip:false}}}}
