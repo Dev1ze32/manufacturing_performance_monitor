@@ -245,6 +245,32 @@ function renderProduction(c, month) {
   const trendMonths = Object.keys(byMonth).sort();
   const trendEff = trendMonths.map(m => byMonth[m].cap > 0 ? byMonth[m].act / byMonth[m].cap * 100 : null);
 
+  // ── Quarter summaries — dynamically group all months into fiscal quarters ─────
+  // Fiscal year: Q1=Oct-Dec, Q2=Jan-Mar, Q3=Apr-Jun, Q4=Jul-Sep
+  function fiscalQuarter(isoMonth) {
+    const mo = parseInt(isoMonth.split('-')[1], 10);
+    const yr = parseInt(isoMonth.split('-')[0], 10);
+    if (mo >= 10) return { q: 1, fy: yr + 1 };
+    if (mo <= 3)  return { q: 2, fy: yr };
+    if (mo <= 6)  return { q: 3, fy: yr };
+    return         { q: 4, fy: yr };
+  }
+  const allMonthlyRows = query(`SELECT month, SUM(capacity) as cap, SUM(actual_output) as act FROM capacity GROUP BY month ORDER BY month`);
+  const byQuarter = {};
+  allMonthlyRows.forEach(r => {
+    const { q, fy } = fiscalQuarter(r.month);
+    const key = `FY${fy} Q${q}`;
+    if (!byQuarter[key]) byQuarter[key] = { cap: 0, act: 0, months: [], fy, q };
+    byQuarter[key].cap += r.cap || 0;
+    byQuarter[key].act += r.act || 0;
+    byQuarter[key].months.push(r.month);
+  });
+  const quarterKeys = Object.keys(byQuarter).sort((a, b) => {
+    const [, fyA, qA] = a.match(/FY(\d+) Q(\d)/);
+    const [, fyB, qB] = b.match(/FY(\d+) Q(\d)/);
+    return fyA !== fyB ? fyA - fyB : qA - qB;
+  });
+
   // Get all lines for the selected month (or all months) that have weekly data
   const weeklyFilter = month ? `WHERE month = '${month}'` : '';
   const weeklyLines = query(`SELECT DISTINCT line FROM capacity_weekly ${weeklyFilter} ORDER BY line`);
@@ -254,6 +280,17 @@ function renderProduction(c, month) {
   const lineRows = month
     ? query(`SELECT line, SUM(capacity) as cap, SUM(actual_output) as act FROM capacity WHERE month=? GROUP BY line ORDER BY line`, [month])
     : query(`SELECT line, SUM(capacity) as cap, SUM(actual_output) as act FROM capacity GROUP BY line ORDER BY line`);
+
+  // Per-line quarter breakdown (for the quarter summary table)
+  const lineQuarterRows = query(`SELECT month, line, SUM(capacity) as cap, SUM(actual_output) as act FROM capacity GROUP BY month, line ORDER BY month, line`);
+  const byLineQuarter = {};
+  lineQuarterRows.forEach(r => {
+    const { q, fy } = fiscalQuarter(r.month);
+    const key = `FY${fy} Q${q}::${r.line}`;
+    if (!byLineQuarter[key]) byLineQuarter[key] = { cap: 0, act: 0, label: `FY${fy} Q${q}`, line: r.line };
+    byLineQuarter[key].cap += r.cap || 0;
+    byLineQuarter[key].act += r.act || 0;
+  });
 
   c.innerHTML = `
     <div class="page-header">
@@ -276,6 +313,55 @@ function renderProduction(c, month) {
           </div>`;
         }).join('')}
       </div>
+    </div>` : ''}
+
+    ${quarterKeys.length ? `
+    <div class="card section-gap">
+      <div class="card-title" style="margin-bottom:14px">Quarterly Summary — All Data</div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Quarter</th><th>Months Included</th><th>Total Capacity</th><th>Total Actual</th><th>Efficiency</th><th>Status</th></tr></thead>
+          <tbody>
+            ${quarterKeys.map(k => {
+              const q = byQuarter[k];
+              const eff = q.cap > 0 ? q.act / q.cap : null;
+              const pct = eff !== null ? (eff * 100).toFixed(2) + '%' : '—';
+              const cls = eff === null ? 'gray' : eff >= 0.95 ? 'green' : eff >= 0.85 ? 'amber' : 'red';
+              return `<tr>
+                <td><strong>${k}</strong></td>
+                <td style="color:var(--gray-500);font-size:12px">${q.months.map(fmtMonthLabel).join(', ')}</td>
+                <td class="td-number">${fmtN(q.cap, 0)}</td>
+                <td class="td-number">${fmtN(q.act, 0)}</td>
+                <td class="td-number"><strong>${pct}</strong></td>
+                <td><span class="pill pill-${cls}">${eff === null ? 'N/A' : eff >= 0.95 ? 'On Target' : eff >= 0.85 ? 'Watch' : 'Below'}</span></td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+      ${quarterKeys.length > 0 ? `
+      <div style="margin-top:16px">
+        <div class="card-title" style="margin-bottom:10px">By Line &amp; Quarter</div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Quarter</th><th>Line</th><th>Capacity</th><th>Actual</th><th>Efficiency</th></tr></thead>
+            <tbody>
+              ${Object.values(byLineQuarter).sort((a,b) => a.label.localeCompare(b.label) || a.line.localeCompare(b.line)).map(r => {
+                const eff = r.cap > 0 ? r.act / r.cap : null;
+                const pct = eff !== null ? (eff * 100).toFixed(2) + '%' : '—';
+                const cls = eff === null ? '' : eff >= 0.95 ? 'td-green' : eff < 0.85 ? 'td-red' : '';
+                return `<tr>
+                  <td>${r.label}</td>
+                  <td><strong>${r.line}</strong></td>
+                  <td class="td-number">${fmtN(r.cap, 0)}</td>
+                  <td class="td-number">${fmtN(r.act, 0)}</td>
+                  <td class="td-number"><strong class="${cls}">${pct}</strong></td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>` : ''}
     </div>` : ''}
 
     <div class="card section-gap">
@@ -492,7 +578,6 @@ function renderManhours(c, month) {
   let totPR=0,totAR=0,totPOT=0,totAOT=0,totAbs=0;
   rows.forEach(r=>{totPR+=r.planned_reg||0;totAR+=r.actual_reg||0;totPOT+=r.planned_ot||0;totAOT+=r.actual_ot||0;totAbs+=r.absenteeism||0;});
   const regUtil=calcRegHrsUtil(totAR,totPR), otUtil=calcOTUtil(totAOT,totPOT);
-  // Absenteeism % = absent person-days / (planned reg hrs / 8hrs per day)
   const plannedPersonDays = totPR > 0 ? totPR / 8 : 0;
   const absPct = plannedPersonDays > 0 ? totAbs / plannedPersonDays : null;
  
@@ -501,6 +586,33 @@ function renderManhours(c, month) {
   const trendLabels = trendRows.map(r=>fmtMonthLabel(r.month));
   const trendReg = trendRows.map(r=>calcRegHrsUtil(r.ar,r.pr));
   const trendOT = trendRows.map(r=>calcOTUtil(r.aot,r.pot));
+
+  // ── Quarterly summary (computed dynamically from all monthly records) ─────────
+  function fiscalQuarter(isoMonth) {
+    const mo = parseInt(isoMonth.split('-')[1], 10);
+    const yr = parseInt(isoMonth.split('-')[0], 10);
+    if (mo >= 10) return { q: 1, fy: yr + 1 };
+    if (mo <= 3)  return { q: 2, fy: yr };
+    if (mo <= 6)  return { q: 3, fy: yr };
+    return         { q: 4, fy: yr };
+  }
+  const allMhRows = query(`SELECT month, SUM(planned_reg) as pr, SUM(actual_reg) as ar, SUM(planned_ot) as pot, SUM(actual_ot) as aot, SUM(absenteeism) as abs FROM manhours GROUP BY month ORDER BY month`);
+  const mhByQuarter = {};
+  allMhRows.forEach(r => {
+    const { q, fy } = fiscalQuarter(r.month);
+    const key = `FY${fy} Q${q}`;
+    if (!mhByQuarter[key]) mhByQuarter[key] = { pr:0, ar:0, pot:0, aot:0, abs:0, months:[] };
+    mhByQuarter[key].pr  += r.pr  || 0;
+    mhByQuarter[key].ar  += r.ar  || 0;
+    mhByQuarter[key].pot += r.pot || 0;
+    mhByQuarter[key].aot += r.aot || 0;
+    mhByQuarter[key].abs += r.abs || 0;
+    mhByQuarter[key].months.push(r.month);
+  });
+  const mhQKeys = Object.keys(mhByQuarter).sort((a,b) => {
+    const [,fyA,qA]=a.match(/FY(\d+) Q(\d)/); const [,fyB,qB]=b.match(/FY(\d+) Q(\d)/);
+    return fyA!==fyB ? fyA-fyB : qA-qB;
+  });
  
   c.innerHTML = `
     <div class="page-header">
@@ -537,6 +649,34 @@ function renderManhours(c, month) {
         <canvas id="mhTrendChart" aria-label="Manhours utilization trend">Manhours trend</canvas>
       </div>
     </div>
+
+    ${mhQKeys.length ? `
+    <div class="card section-gap">
+      <div class="card-title" style="margin-bottom:14px">Quarterly Manhours Summary</div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Quarter</th><th>Months</th><th>Planned Reg</th><th>Actual Reg</th><th>Reg Util%</th><th>Planned OT</th><th>Actual OT</th><th>OT Util%</th><th>Absenteeism</th></tr></thead>
+          <tbody>
+            ${mhQKeys.map(k => {
+              const q = mhByQuarter[k];
+              const ru = calcRegHrsUtil(q.ar, q.pr);
+              const ou = calcOTUtil(q.aot, q.pot);
+              return `<tr>
+                <td><strong>${k}</strong></td>
+                <td style="color:var(--gray-500);font-size:12px">${q.months.map(fmtMonthLabel).join(', ')}</td>
+                <td class="td-number">${fmtN(q.pr,0)}</td>
+                <td class="td-number">${fmtN(q.ar,1)}</td>
+                <td class="td-number"><strong class="${ru&&ru>=0.9?'td-green':ru&&ru<0.8?'td-red':''}">${ru!==null?(ru*100).toFixed(2)+'%':'—'}</strong></td>
+                <td class="td-number">${fmtN(q.pot,0)}</td>
+                <td class="td-number">${fmtN(q.aot,1)}</td>
+                <td class="td-number"><strong>${ou!==null?(ou*100).toFixed(2)+'%':'—'}</strong></td>
+                <td class="td-number">${fmtN(q.abs,0)}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>` : ''}
     <div class="card">
       <div class="card-title" style="margin-bottom:14px">Records by Line</div>
       <div class="table-wrap">
