@@ -1,9 +1,49 @@
 import { query } from '../database.js';
 
+const effectiveCapacityCte = `
+  WITH weekly AS (
+    SELECT
+      cw.month,
+      cw.line,
+      SUM(cw.capacity) as capacity,
+      SUM(cw.actual_output) as actual_output,
+      COALESCE(AVG(cw.machine_availability), (
+        SELECT c.machine_availability
+        FROM capacity c
+        WHERE c.month = cw.month AND c.line = cw.line
+        LIMIT 1
+      )) as machine_availability,
+      COUNT(*) as weekly_count
+    FROM capacity_weekly cw
+    GROUP BY cw.month, cw.line
+  ),
+  manual AS (
+    SELECT
+      c.month,
+      c.line,
+      c.capacity,
+      c.actual_output,
+      c.machine_availability,
+      0 as weekly_count
+    FROM capacity c
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM weekly w
+      WHERE w.month = c.month AND w.line = c.line
+    )
+  ),
+  effective AS (
+    SELECT * FROM weekly
+    UNION ALL
+    SELECT * FROM manual
+  )
+`;
+
 export function getAllDistinctMonthRows() {
   return [
     ...query('SELECT DISTINCT month FROM utilities'),
     ...query('SELECT DISTINCT month FROM production'),
+    ...query('SELECT DISTINCT month FROM capacity'),
     ...query('SELECT DISTINCT month FROM capacity_weekly'),
     ...query('SELECT DISTINCT month FROM manhours'),
     ...query('SELECT DISTINCT month FROM loss'),
@@ -20,6 +60,7 @@ export function getCostDistinctMonthRows() {
 
 export function getRunrateManhoursDistinctMonthRows() {
   return [
+    ...query('SELECT DISTINCT month FROM capacity'),
     ...query('SELECT DISTINCT month FROM capacity_weekly'),
     ...query('SELECT DISTINCT month FROM manhours')
   ];
@@ -55,18 +96,20 @@ export function getManhoursSummaryRows(month = '') {
 }
 
 export function getRunrateSummaryRows(month = '') {
-  const weeklyWhere = month ? 'WHERE month = ?' : '';
-  const weeklyParams = month ? [month] : [];
-  return query(`SELECT
+  const where = month ? 'WHERE month = ?' : '';
+  const params = month ? [month] : [];
+  return query(`${effectiveCapacityCte}
+    SELECT
       month,
       line,
       SUM(capacity) as capacity,
       SUM(actual_output) as actual_output,
-      COUNT(*) as weekly_count
-    FROM capacity_weekly
-    ${weeklyWhere}
+      AVG(machine_availability) as machine_availability,
+      SUM(weekly_count) as weekly_count
+    FROM effective
+    ${where}
     GROUP BY month, line
-    ORDER BY month DESC, line`, weeklyParams);
+    ORDER BY month DESC, line`, params);
 }
 
 export function getLatestUtilitiesRecord(month) {

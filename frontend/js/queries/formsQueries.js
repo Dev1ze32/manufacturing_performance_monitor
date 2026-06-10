@@ -4,6 +4,19 @@ export function getUtilityRows() {
   return query('SELECT * FROM utilities ORDER BY month DESC LIMIT 36');
 }
 
+export function getActualCostRows() {
+  return query(`SELECT month, utility_cost, rm_cost, volume FROM (
+      SELECT u.month, u.utility_cost, u.rm_cost, p.volume
+      FROM utilities u
+      LEFT JOIN production p ON u.month = p.month
+      UNION
+      SELECT p.month, u.utility_cost, u.rm_cost, p.volume
+      FROM production p
+      LEFT JOIN utilities u ON p.month = u.month
+    )
+    ORDER BY month DESC LIMIT 36`);
+}
+
 export function saveUtilityRecord(month, utilityCost, rmCost) {
   return run(`INSERT INTO utilities (month,utility_cost,rm_cost) VALUES (?,?,?)
     ON CONFLICT(month) DO UPDATE SET utility_cost=excluded.utility_cost, rm_cost=excluded.rm_cost`,
@@ -18,6 +31,32 @@ export function saveProductionRecord(month, volume) {
   return run('INSERT INTO production (month,volume) VALUES (?,?) ON CONFLICT(month) DO UPDATE SET volume=excluded.volume', [month, volume]);
 }
 
+export function saveActualCostRecord(month, utilityCost, rmCost, volume) {
+  let saved = true;
+
+  if (utilityCost != null || rmCost != null) {
+    saved = saveUtilityRecord(month, utilityCost, rmCost) && saved;
+  }
+
+  if (volume != null) {
+    saved = saveProductionRecord(month, volume) && saved;
+  }
+
+  return saved;
+}
+
+export function deleteActualCostRecord(month) {
+  const deletedUtilities = run('DELETE FROM utilities WHERE month=?', [month]);
+  const deletedProduction = run('DELETE FROM production WHERE month=?', [month]);
+  return deletedUtilities && deletedProduction;
+}
+
+export function clearActualCostRecords() {
+  const clearedUtilities = run('DELETE FROM utilities');
+  const clearedProduction = run('DELETE FROM production');
+  return clearedUtilities && clearedProduction;
+}
+
 export function getCapacityRows() {
   return query('SELECT * FROM capacity ORDER BY month DESC, line LIMIT 60');
 }
@@ -26,16 +65,23 @@ export function getCapacityWeeklyRows() {
   return query('SELECT * FROM capacity_weekly ORDER BY month DESC, line, week_num ASC, week_label ASC LIMIT 200');
 }
 
-export function saveCapacityRecord(month, line, capacity, actualOutput) {
-  return run(`INSERT INTO capacity (month,line,capacity,actual_output) VALUES (?,?,?,?)
-    ON CONFLICT(month,line) DO UPDATE SET capacity=excluded.capacity, actual_output=excluded.actual_output`,
-    [month, line, capacity, actualOutput]);
+export function saveCapacityRecord(month, line, capacity, actualOutput, machineAvailability = null) {
+  return run(`INSERT INTO capacity (month,line,capacity,actual_output,machine_availability) VALUES (?,?,?,?,?)
+    ON CONFLICT(month,line) DO UPDATE SET
+      capacity=excluded.capacity,
+      actual_output=excluded.actual_output,
+      machine_availability=excluded.machine_availability`,
+    [month, line, capacity, actualOutput, machineAvailability]);
 }
 
-export function saveWeeklyCapacityRecord(month, line, weekLabel, weekNum, capacity, actualOutput) {
-  return run(`INSERT INTO capacity_weekly (month,line,week_label,week_num,capacity,actual_output) VALUES (?,?,?,?,?,?)
-    ON CONFLICT(month,line,week_label) DO UPDATE SET week_num=excluded.week_num, capacity=excluded.capacity, actual_output=excluded.actual_output`,
-    [month, line, weekLabel, weekNum, capacity, actualOutput]);
+export function saveWeeklyCapacityRecord(month, line, weekLabel, weekNum, capacity, actualOutput, machineAvailability = null) {
+  return run(`INSERT INTO capacity_weekly (month,line,week_label,week_num,capacity,actual_output,machine_availability) VALUES (?,?,?,?,?,?,?)
+    ON CONFLICT(month,line,week_label) DO UPDATE SET
+      week_num=excluded.week_num,
+      capacity=excluded.capacity,
+      actual_output=excluded.actual_output,
+      machine_availability=excluded.machine_availability`,
+    [month, line, weekLabel, weekNum, capacity, actualOutput, machineAvailability]);
 }
 
 export function getWeeklyCapacityById(id) {

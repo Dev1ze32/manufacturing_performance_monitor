@@ -15,151 +15,440 @@ import {
   fmt, fmtN, fmtPct, fmtMonthLabel, getKPIs, calcUtilCostPerKg, 
   calcRMCostPerKg, calcEnggCostPerKg, calcEfficiency, 
   calcRegHrsUtil, calcOTUtil, calcLossContribution, calcVariance, calcVariancePct,
-  calcPersonDays, calcAbsenteeismRate, calcTotalManhoursUtil,
+  calcPersonDays, calcAbsenteeismRate, calcTotalManhoursUtil, calcOTRate,
   calcPlannedRegHours, calcPlannedOTHours, getManhoursSummaryRows, getRunrateSummaryRows,
+  getFY, getFYMonths,
   destroyChart, charts 
 } from './utils.js';
 
 
 // ── EXECUTIVE DASHBOARD ───────────────────────────────────────────────────────
 function renderExecutive(c, month) {
-  const kpis = getKPIs(month);
   const mLabel = month ? fmtMonthLabel(month) : 'All Months';
- 
-  // Runrate efficiency is generated from weekly capacity/actual rows.
+
+  // ── Current month KPIs ──────────────────────────────────────────────────────
+  const kpis = getKPIs(month);
+
+  // ── Previous month for MoM delta ───────────────────────────────────────────
+  function prevMonth(m) {
+    if (!m) return '';
+    const [y, mo] = m.split('-').map(Number);
+    return mo === 1
+      ? `${y - 1}-12`
+      : `${y}-${String(mo - 1).padStart(2, '0')}`;
+  }
+  const prevM = month ? prevMonth(month) : '';
+  const prevKpis = prevM ? getKPIs(prevM) : null;
+
+  function momDelta(curr, prev) {
+    if (curr == null || prev == null || prev === 0) return null;
+    return (curr - prev) / Math.abs(prev);
+  }
+  function momArrow(delta, lowerIsBetter = true) {
+    if (delta == null) return '';
+    const up = delta > 0;
+    const bad = lowerIsBetter ? up : !up;
+    const arrow = up ? '▲' : '▼';
+    const pct = (Math.abs(delta) * 100).toFixed(1) + '%';
+    const color = bad ? 'var(--red)' : 'var(--green)';
+    return `<span style="font-size:12px;font-weight:700;color:${color};margin-left:6px">${arrow} ${pct} MoM</span>`;
+  }
+
+  // ── Budget comparison for selected month ───────────────────────────────────
+  const budRows = getBudgetByMonth(month);
+  const bud = budRows[0] || {};
+  const hasOB = bud.utility_budget != null || bud.rm_budget != null || bud.volume_budget != null;
+
+  function obStatus(actual, budget, lowerIsBetter = true) {
+    if (actual == null || budget == null || budget === 0) return null;
+    const variance = (actual - budget) / Math.abs(budget);
+    const over = lowerIsBetter ? actual > budget : actual < budget;
+    return { variance, over };
+  }
+  function obBadge(actual, budget, lowerIsBetter = true) {
+    const s = obStatus(actual, budget, lowerIsBetter);
+    if (!s) return '';
+    const pct = (Math.abs(s.variance) * 100).toFixed(1) + '%';
+    const color = s.over ? 'var(--red)' : 'var(--green)';
+    const icon = s.over ? '↑' : '↓';
+    const label = s.over ? 'over OB' : 'under OB';
+    return `<div style="font-size:11px;font-weight:700;color:${color};margin-top:4px">${icon} ${pct} ${label}</div>`;
+  }
+
+  // ── Runrate efficiency ──────────────────────────────────────────────────────
   const capRows = getRunrateSummaryRows(month || '');
   let totalCap = 0, totalActual = 0;
-  capRows.forEach(r => { totalCap += r.capacity||0; totalActual += r.actual_output||0; });
-  const efficiency = totalCap > 0 ? totalActual/totalCap : null;
- 
-  // Manhours
+  capRows.forEach(r => { totalCap += r.capacity || 0; totalActual += r.actual_output || 0; });
+  const efficiency = totalCap > 0 ? totalActual / totalCap : null;
+
+  const prevCapRows = prevM ? getRunrateSummaryRows(prevM) : [];
+  let prevTotalCap = 0, prevTotalActual = 0;
+  prevCapRows.forEach(r => { prevTotalCap += r.capacity || 0; prevTotalActual += r.actual_output || 0; });
+  const prevEfficiency = prevTotalCap > 0 ? prevTotalActual / prevTotalCap : null;
+
+  // ── Manhours ────────────────────────────────────────────────────────────────
   const mhRows = getManhoursSummaryRows(month || '');
-  let sumPReg=0, sumAReg=0, sumPOT=0, sumAOT=0;
+  let sumPReg = 0, sumAReg = 0, sumPOT = 0, sumAOT = 0, sumAbs = 0, sumPersonDays = 0;
   mhRows.forEach(r => {
     sumPReg += r.planned_reg || calcPlannedRegHours(r.working_days, r.manpower) || 0;
     sumAReg += r.actual_reg || 0;
-    sumPOT += r.planned_ot || calcPlannedOTHours(r.working_days, r.manpower) || 0;
-    sumAOT += r.actual_ot || 0;
+    sumPOT  += r.planned_ot  || calcPlannedOTHours(r.working_days, r.manpower) || 0;
+    sumAOT  += r.actual_ot  || 0;
+    sumAbs  += r.absenteeism || 0;
+    const pd = r.person_days ?? calcPersonDays(r.working_days, r.manpower);
+    if (pd != null) sumPersonDays += pd;
   });
- 
   const regUtil = calcRegHrsUtil(sumAReg, sumPReg);
-  const otUtil = calcOTUtil(sumAOT, sumPOT);
- 
-  const budRows = getBudgetByMonth(month);
-  const bud = budRows[0] || {};
- 
-  function kpiCard(label, value, unit='', badge='', hint='') {
-    const hasVal = value !== null && value !== undefined && !isNaN(value) && isFinite(value);
-    return `<div class="metric-card">
+  const otUtil  = calcOTUtil(sumAOT, sumPOT);
+  const otRate  = calcOTRate(sumAOT, sumAReg);
+  const absPct  = sumPersonDays > 0 ? sumAbs / sumPersonDays : null;
+
+  // ── FY trend — all months in the selected month's fiscal year ───────────────
+  // Shows every month of the FY so you can see the full year arc in context.
+  const selectedFY = month ? getFY(month) : null;
+  const fyMonthsList = selectedFY ? getFYMonths(selectedFY) : [];
+  const allCostRows = getCostDashboardRows(); // all available months, oldest-first
+  const costByMonth = {};
+  allCostRows.forEach(r => { costByMonth[r.month] = r; });
+  const sameMonthPriorYear = m => {
+    if (!m) return '';
+    const [y, mo] = m.split('-').map(Number);
+    return `${y - 1}-${String(mo).padStart(2, '0')}`;
+  };
+
+  // Build FY series — null for months with no data yet (future or missing)
+  const fyTrendLabels = fyMonthsList.map(m => {
+    const [, mo] = m.split('-').map(Number);
+    return ['','Oct','Nov','Dec','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep'][mo];
+  });
+  const fyTrendEngg = fyMonthsList.map(m => {
+    const r = costByMonth[m];
+    return (r && r.volume > 0) ? (r.utility_cost + r.rm_cost) / r.volume : null;
+  });
+  const fyPriorEngg = fyMonthsList.map(m => {
+    const r = costByMonth[sameMonthPriorYear(m)];
+    return (r && r.volume > 0) ? (r.utility_cost + r.rm_cost) / r.volume : null;
+  });
+  const fyTrendUtil = fyMonthsList.map(m => {
+    const r = costByMonth[m];
+    return (r && r.volume > 0) ? r.utility_cost / r.volume : null;
+  });
+  const fyTrendRM = fyMonthsList.map(m => {
+    const r = costByMonth[m];
+    return (r && r.volume > 0) ? r.rm_cost / r.volume : null;
+  });
+
+  // OB target line for the FY chart
+  const fyTrendOB = fyMonthsList.map(m => {
+    // We need budget for each month — query via getBudgetByMonth per month
+    // Use allCostRows budget from getBudgetActualRows instead to avoid N queries
+    return null; // filled below
+  });
+
+  const budgetActualRows = getBudgetActualRows(''); // all months
+  const budgetByMonth = {};
+  budgetActualRows.forEach(r => { budgetByMonth[r.month] = r; });
+  const fyOBEngg = fyMonthsList.map(m => {
+    const r = budgetByMonth[m];
+    if (!r || r.volume_budget == null || r.volume_budget === 0) return null;
+    const utilB = r.utility_budget || 0;
+    const rmB   = r.rm_budget    || 0;
+    return (utilB + rmB) / r.volume_budget;
+  });
+
+  // ── Runrate by line for the selected month ─────────────────────────────────
+  const lineData = {};
+  capRows.forEach(r => {
+    const line = r.line || 'Plant-wide';
+    if (!lineData[line]) lineData[line] = { cap: 0, act: 0 };
+    lineData[line].cap += r.capacity || 0;
+    lineData[line].act += r.actual_output || 0;
+  });
+  const lineRows = Object.entries(lineData)
+    .map(([line, d]) => ({ line, cap: d.cap, act: d.act, eff: d.cap > 0 ? d.act / d.cap : null }))
+    .sort((a, b) => a.line.localeCompare(b.line));
+
+  // ── Highlight index: which KPI needs attention ─────────────────────────────
+  const alerts = [];
+  if (kpis.engg_per_kg != null && bud.utility_budget != null && bud.rm_budget != null && bud.volume_budget) {
+    const obEngg = (bud.utility_budget + bud.rm_budget) / bud.volume_budget;
+    if (kpis.engg_per_kg > obEngg * 1.05) alerts.push(`Engineering cost/kg is <strong>${((kpis.engg_per_kg/obEngg - 1)*100).toFixed(1)}% above OB target</strong>`);
+  }
+  if (efficiency != null && efficiency < 0.85) alerts.push(`Overall runrate efficiency is low at <strong>${(efficiency*100).toFixed(1)}%</strong>`);
+  if (absPct != null && absPct > 0.05) alerts.push(`Absenteeism rate is elevated at <strong>${(absPct*100).toFixed(1)}%</strong>`);
+  if (otUtil != null && otUtil < 0.70) alerts.push(`OT utilization is low at <strong>${(otUtil*100).toFixed(1)}%</strong></strong> — planned OT may not be needed`);
+
+  // ── Helper: KPI scorecard with MoM delta and OB badge ──────────────────────
+  function scoreCard(label, value, decimals, isCost, prevValue, budgetValue, lowerIsBetter, hint, unit='') {
+    const hasVal = value != null && isFinite(value);
+    const fmtVal = !hasVal ? '—'
+      : unit === '%' ? (value * 100).toFixed(1) + '%'
+      : isCost ? fmt(value, decimals)
+      : fmtN(value, decimals);
+
+    const delta = momDelta(value, prevValue);
+    const arrow = hasVal && prevValue != null ? momArrow(delta, lowerIsBetter) : '';
+    const ob = hasVal && budgetValue != null ? obBadge(value, budgetValue, lowerIsBetter) : '';
+
+    return `<div class="metric-card" style="position:relative">
       <div class="metric-label">${label}</div>
-      <div class="metric-value">${hasVal ? (unit==='%' ? (value*100).toFixed(2)+'%' : fmt(value,3)) : '—'}</div>
-      ${hint ? `<div class="metric-sub">${hint}</div>` : ''}
-      ${badge ? `<div class="metric-badge badge-${badge.type}">${badge.text}</div>` : ''}
+      <div style="display:flex;align-items:baseline;flex-wrap:wrap;gap:4px">
+        <div class="metric-value">${fmtVal}</div>${arrow}
+      </div>
+      ${ob}
+      ${hint ? `<div class="metric-sub" style="margin-top:6px">${hint}</div>` : ''}
     </div>`;
   }
- 
-  // Trend data (last 12 months)
-  const trendU = getExecutiveCostTrendRows();
- 
-  const trendLabels = trendU.map(r => fmtMonthLabel(r.month));
-  const trendUtil = trendU.map(r => r.volume > 0 ? (r.utility_cost/r.volume) : null);
-  const trendRM = trendU.map(r => r.volume > 0 ? (r.rm_cost/r.volume) : null);
-  const trendEngg = trendU.map(r => r.volume > 0 ? ((r.utility_cost+r.rm_cost)/r.volume) : null);
- 
+
+  // OB/kg targets derived from budget record
+  const obEnggPerKg  = (bud.utility_budget != null && bud.rm_budget != null && bud.volume_budget)
+    ? (bud.utility_budget + bud.rm_budget) / bud.volume_budget : null;
+  const obUtilPerKg  = (bud.utility_budget != null && bud.volume_budget) ? bud.utility_budget / bud.volume_budget : null;
+  const obRMPerKg    = (bud.rm_budget != null && bud.volume_budget) ? bud.rm_budget / bud.volume_budget : null;
+
   c.innerHTML = `
     <div class="page-header">
       <div class="page-header-row">
         <div>
           <h1>Executive Summary</h1>
-          <p>Key performance indicators — ${mLabel}</p>
+          <p>${mLabel}${selectedFY ? ` &nbsp;·&nbsp; FY${selectedFY}` : ''}</p>
         </div>
       </div>
     </div>
- 
-    <div class="section-gap">
-      <div class="card-title" style="margin-bottom:12px; color:var(--gray-500);">COST PERFORMANCE</div>
-      <div class="metrics-grid">
-        ${kpiCard('Utility Cost / Kg', kpis.util_per_kg, '', '', kpis.util_cost ? `₱ ${fmtN(kpis.util_cost,2)} total` : '')}
-        ${kpiCard('R&M Cost / Kg', kpis.rm_per_kg, '', '', kpis.rm_cost ? `₱ ${fmtN(kpis.rm_cost,2)} total` : '')}
-        ${kpiCard('Engineering Cost / Kg', kpis.engg_per_kg, '', '', 'Utilities + R&M combined')}
-        ${kpiCard('Production Volume', kpis.volume, '', '', 'in metric tons')}
-      </div>
+
+    ${alerts.length ? `
+    <div style="background:var(--red-light);border:1px solid #fca5a5;border-radius:var(--radius);padding:12px 16px;margin-bottom:20px;display:flex;flex-wrap:wrap;gap:8px;align-items:flex-start">
+      <span style="font-size:12px;font-weight:700;color:var(--red);text-transform:uppercase;letter-spacing:.04em;margin-right:4px">⚠ Attention</span>
+      ${alerts.map(a => `<span style="font-size:12px;color:var(--red)">${a}</span>`).join('<span style="color:#fca5a5">·</span>')}
+    </div>` : month ? `
+    <div style="background:var(--green-light);border:1px solid #86efac;border-radius:var(--radius);padding:10px 16px;margin-bottom:20px">
+      <span style="font-size:12px;font-weight:700;color:var(--green)">✓ All key metrics within normal range for ${mLabel}</span>
+    </div>` : ''}
+
+    <!-- ── COST ── -->
+    <div class="exec-section-label">COST PERFORMANCE${hasOB ? ' vs OB' : ''}</div>
+    <div class="metrics-grid" style="margin-bottom:24px">
+      ${scoreCard('Engineering Cost / Kg', kpis.engg_per_kg, 3, true,
+          prevKpis?.engg_per_kg, obEnggPerKg, true,
+          kpis.util_cost != null && kpis.rm_cost != null ? `₱ ${fmtN(kpis.util_cost + kpis.rm_cost, 0)} total` : 'Util + R&M combined')}
+      ${scoreCard('Utility Cost / Kg', kpis.util_per_kg, 3, true,
+          prevKpis?.util_per_kg, obUtilPerKg, true,
+          kpis.util_cost != null ? `₱ ${fmtN(kpis.util_cost, 0)} total` : '')}
+      ${scoreCard('R&M Cost / Kg', kpis.rm_per_kg, 3, true,
+          prevKpis?.rm_per_kg, obRMPerKg, true,
+          kpis.rm_cost != null ? `₱ ${fmtN(kpis.rm_cost, 0)} total` : '')}
+      ${scoreCard('Production Volume', kpis.volume, 1, false,
+          prevKpis?.volume, bud.volume_budget, false,
+          bud.volume_budget != null ? `OB: ${fmtN(bud.volume_budget, 1)} MT` : 'metric tons')}
     </div>
- 
-    <div class="section-gap">
-      <div class="card-title" style="margin-bottom:12px; color:var(--gray-500);">PRODUCTION PERFORMANCE</div>
-      <div class="metrics-grid">
-        ${kpiCard('Overall Efficiency', efficiency, '%', '', totalCap > 0 ? `${fmtN(totalActual,0)} / ${fmtN(totalCap,0)} units` : '')}
-        ${kpiCard('Regular Hrs Utilization', regUtil, '%', '', sumPReg > 0 ? `${fmtN(sumAReg,1)} / ${fmtN(sumPReg,0)} hrs` : '')}
-        ${kpiCard('OT Utilization', otUtil, '%', '', sumPOT > 0 ? `${fmtN(sumAOT,1)} / ${fmtN(sumPOT,0)} hrs` : '')}
-      </div>
+
+    <!-- ── PRODUCTION ── -->
+    <div class="exec-section-label">PRODUCTION PERFORMANCE</div>
+    <div class="metrics-grid" style="margin-bottom:24px">
+      ${scoreCard('Overall Runrate', efficiency, 1, false, prevEfficiency, null, false, totalCap > 0 ? `${fmtN(totalActual,0)} / ${fmtN(totalCap,0)} units` : '', '%')}
+      ${scoreCard('Regular Hrs Util.', regUtil, 1, false, null, null, false, sumPReg > 0 ? `${fmtN(sumAReg,0)} / ${fmtN(sumPReg,0)} hrs` : '', '%')}
+      ${scoreCard('OT Utilization', otUtil, 1, false, null, null, false, sumPOT > 0 ? `${fmtN(sumAOT,0)} / ${fmtN(sumPOT,0)} hrs` : '', '%')}
+      ${scoreCard('OT Rate', otRate, 1, false, null, null, true, 'OT share of actual manhours', '%')}
+      ${scoreCard('Absenteeism Rate', absPct, 1, false, null, null, true, sumAbs > 0 ? `${fmtN(sumAbs,0)} person-days absent` : '', '%')}
     </div>
- 
-    <div class="grid-2 section-gap">
-      <div class="card">
-        <div class="card-title" style="margin-bottom:14px">Cost per Kg Trend</div>
-        <div class="chart-container">
-          <canvas id="execTrendChart" aria-label="Cost per Kg trend chart">Cost per Kg trend data</canvas>
-        </div>
+
+    <!-- ── LINE EFFICIENCY SNAPSHOT ── -->
+    ${lineRows.length ? `
+    <div class="exec-section-label">RUNRATE BY LINE — ${mLabel}</div>
+    <div class="metrics-grid" style="margin-bottom:24px">
+      ${lineRows.map(r => {
+        const pct = r.eff != null ? (r.eff * 100).toFixed(1) + '%' : '—';
+        const color = r.eff == null ? 'var(--gray-300)'
+          : r.eff >= 0.95 ? 'var(--green)'
+          : r.eff >= 0.85 ? 'var(--amber)'
+          : 'var(--red)';
+        const barW = r.eff != null ? Math.min(r.eff * 100, 100) : 0;
+        const barColor = r.eff == null ? 'var(--gray-200)'
+          : r.eff >= 0.95 ? 'var(--teal)'
+          : r.eff >= 0.85 ? 'var(--amber)'
+          : 'var(--red)';
+        return `<div class="metric-card" style="border-top:3px solid ${color}">
+          <div class="metric-label">${r.line}</div>
+          <div class="metric-value" style="color:${color};font-size:22px">${pct}</div>
+          <div class="progress-bar" style="margin-top:8px"><div class="progress-fill" style="background:${barColor};width:${barW}%"></div></div>
+          <div class="metric-sub" style="margin-top:6px">${fmtN(r.act,0)} / ${fmtN(r.cap,0)} units</div>
+        </div>`;
+      }).join('')}
+    </div>` : ''}
+
+    <!-- ── FY TREND CHART ── -->
+    ${selectedFY ? `
+    <div class="card section-gap">
+      <div style="display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:14px">
+        <div class="card-title">FY${selectedFY} Engineering Cost / Kg — Full Year View</div>
+        <div style="font-size:11px;color:var(--gray-400)">Selected month highlighted · OB target shown where available</div>
       </div>
-      <div class="card">
-        <div class="card-title" style="margin-bottom:14px">Cost Breakdown — ${mLabel}</div>
-        <div class="chart-container">
-          <canvas id="execPieChart" aria-label="Cost breakdown pie chart">Cost breakdown for selected month</canvas>
-        </div>
+      <div class="chart-container">
+        <canvas id="execFYTrendChart" aria-label="FY cost per kg trend">FY cost trend</canvas>
       </div>
-    </div>
+    </div>` : `
+    <div class="card section-gap">
+      <div class="card-title" style="margin-bottom:14px">Engineering Cost / Kg — All Available Months</div>
+      <div class="chart-container">
+        <canvas id="execFYTrendChart" aria-label="Cost per kg trend">Cost trend</canvas>
+      </div>
+    </div>`}
   `;
- 
-  // Trend chart
-  destroyChart('execTrend');
-  const ctx1 = document.getElementById('execTrendChart');
-  if (ctx1 && trendLabels.length) {
-    charts['execTrend'] = new Chart(ctx1, {
-      type: 'line',
-      data: {
-        labels: trendLabels,
-        datasets: [
-          { label: 'Util/Kg', data: trendUtil, borderColor: '#3b82f6', borderWidth: 2, tension: 0.4, pointRadius: 0, pointHoverRadius: 5, fill: false },
-          { label: 'R&M/Kg', data: trendRM, borderColor: '#f59e0b', borderWidth: 2, tension: 0.4, pointRadius: 0, pointHoverRadius: 5, fill: false },
-          { label: 'Engg/Kg', data: trendEngg, borderColor: '#8b5cf6', borderWidth: 2, borderDash: [4,4], tension: 0.4, pointRadius: 0, pointHoverRadius: 5, fill: false }
-        ]
+
+  // ── FY TREND CHART ──────────────────────────────────────────────────────────
+  destroyChart('execFYTrend');
+  const ctx = document.getElementById('execFYTrendChart');
+
+  if (ctx) {
+    let labels, utilData, rmData, enggData, priorData, obData, selectedIdx;
+
+    if (selectedFY) {
+      labels    = fyTrendLabels;
+      utilData  = fyTrendUtil;
+      rmData    = fyTrendRM;
+      enggData  = fyTrendEngg;
+      priorData = fyPriorEngg;
+      obData    = fyOBEngg;
+      selectedIdx = month ? fyMonthsList.indexOf(month) : -1;
+    } else {
+      // All months mode
+      labels    = allCostRows.map(r => fmtMonthLabel(r.month));
+      utilData  = allCostRows.map(r => r.volume > 0 ? r.utility_cost / r.volume : null);
+      rmData    = allCostRows.map(r => r.volume > 0 ? r.rm_cost / r.volume : null);
+      enggData  = allCostRows.map(r => r.volume > 0 ? (r.utility_cost + r.rm_cost) / r.volume : null);
+      priorData = allCostRows.map(r => {
+        const prior = costByMonth[sameMonthPriorYear(r.month)];
+        return (prior && prior.volume > 0) ? (prior.utility_cost + prior.rm_cost) / prior.volume : null;
+      });
+      obData    = allCostRows.map(r => {
+        const b = budgetByMonth[r.month];
+        return (b && b.volume_budget) ? (b.utility_budget + b.rm_budget) / b.volume_budget : null;
+      });
+      selectedIdx = -1;
+    }
+
+    const hasOBData = obData.some(v => v != null);
+    const hasPriorData = priorData.some(v => v != null);
+
+    // Build point styling: highlight selected month with a larger dot
+    const pointRadius = labels.map((_, i) => i === selectedIdx ? 7 : 0);
+    const pointHoverRadius = labels.map((_, i) => i === selectedIdx ? 9 : 5);
+    const pointBg = labels.map((_, i) => i === selectedIdx ? '#fff' : '#8b5cf6');
+    const pointBorderColor = labels.map((_, i) => i === selectedIdx ? '#7c3aed' : '#8b5cf6');
+
+    const datasets = [
+      {
+        label: 'Util/Kg',
+        data: utilData,
+        borderColor: '#3b82f6',
+        backgroundColor: 'rgba(59,130,246,0.08)',
+        borderWidth: 1.5,
+        tension: 0.35,
+        pointRadius: 0,
+        pointHoverRadius: 4,
+        fill: false
       },
-      options: {
-        responsive: true, maintainAspectRatio: false,
-        interaction: { mode: 'index', intersect: false }, // Syncs tooltips vertically
-        plugins: { 
-          legend: { position: 'top', labels: { usePointStyle: true, boxWidth: 8, font: {size: 12} } } 
-        },
-        scales: { 
-          y: { border: { display: false }, grid: { color: '#f1f5f9', drawTicks: false } }, 
-          x: { border: { display: false }, grid: { display: false } } 
-        }
+      {
+        label: 'R&M/Kg',
+        data: rmData,
+        borderColor: '#f59e0b',
+        backgroundColor: 'rgba(245,158,11,0.08)',
+        borderWidth: 1.5,
+        tension: 0.35,
+        pointRadius: 0,
+        pointHoverRadius: 4,
+        fill: false
+      },
+      {
+        label: 'Engg/Kg',
+        data: enggData,
+        borderColor: '#7c3aed',
+        backgroundColor: 'rgba(124,58,237,0.06)',
+        borderWidth: 2.5,
+        tension: 0.35,
+        pointRadius: pointRadius,
+        pointHoverRadius: pointHoverRadius,
+        pointBackgroundColor: pointBg,
+        pointBorderColor: pointBorderColor,
+        pointBorderWidth: 2,
+        fill: false
       }
-    });
-  }
- 
-  // Pie chart
-  destroyChart('execPie');
-  const ctx2 = document.getElementById('execPieChart');
-  if (ctx2 && kpis.util_cost && kpis.rm_cost) {
-    charts['execPie'] = new Chart(ctx2, {
-      type: 'doughnut',
-      data: {
-        labels: ['Utilities', 'R&M'],
-        datasets: [{ 
-          data: [kpis.util_cost, kpis.rm_cost], 
-          backgroundColor: ['#3b82f6', '#f59e0b'], 
-          borderWidth: 0, // Removes the harsh white separator
-          hoverOffset: 4  // Pops out slightly when hovered
-        }]
-      },
+    ];
+
+    if (hasOBData) {
+      datasets.push({
+        label: 'OB Target',
+        data: obData,
+        borderColor: '#dc2626',
+        borderDash: [5, 4],
+        borderWidth: 1.5,
+        tension: 0,
+        pointRadius: 0,
+        pointHoverRadius: 4,
+        fill: false
+      });
+    }
+
+    if (hasPriorData) {
+      datasets.push({
+        label: 'Prior Year Engg/Kg',
+        data: priorData,
+        borderColor: '#64748b',
+        borderDash: [2, 4],
+        borderWidth: 1.5,
+        tension: 0.25,
+        pointRadius: 0,
+        pointHoverRadius: 4,
+        fill: false
+      });
+    }
+
+    charts['execFYTrend'] = new Chart(ctx, {
+      type: 'line',
+      data: { labels, datasets },
       options: {
-        responsive: true, maintainAspectRatio: false,
-        cutout: '75%', // Makes the ring thinner and cleaner
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
         plugins: {
-          legend: { position: 'bottom', labels: { usePointStyle: true, padding: 20 } },
-          tooltip: { callbacks: { label: ctx => `₱ ${fmtN(ctx.parsed, 2)}` } }
+          legend: {
+            position: 'top',
+            labels: { usePointStyle: true, boxWidth: 8, font: { size: 11 }, padding: 16 }
+          },
+          tooltip: {
+            callbacks: {
+              title: items => items[0].label,
+              label: item => {
+                if (item.parsed.y == null) return null;
+                const prefix = item.dataset.label === 'OB Target' ? '  OB ' : '  ';
+                return `${prefix}${item.dataset.label}: ₱${item.parsed.y.toFixed(3)}/kg`;
+              }
+            }
+          },
+          annotation: selectedIdx >= 0 ? {
+            annotations: {
+              selectedLine: {
+                type: 'line',
+                xMin: selectedIdx,
+                xMax: selectedIdx,
+                borderColor: 'rgba(124,58,237,0.25)',
+                borderWidth: 1,
+                borderDash: [3, 3]
+              }
+            }
+          } : {}
+        },
+        scales: {
+          y: {
+            border: { display: false },
+            grid: { color: '#f1f5f9', drawTicks: false },
+            ticks: { font: { size: 11 }, callback: v => '₱' + v.toFixed(2) }
+          },
+          x: {
+            border: { display: false },
+            grid: { display: false },
+            ticks: { font: { size: 11 } }
+          }
         }
       }
     });
@@ -172,6 +461,13 @@ function renderCost(c, month) {
  
   const mLabel = month ? fmtMonthLabel(month) : 'All Months';
   const sel = month ? rows.filter(r=>r.month===month) : rows;
+  const rowsByMonth = {};
+  rows.forEach(r => { rowsByMonth[r.month] = r; });
+  const previousYearMonth = m => {
+    if (!m) return '';
+    const [y, mo] = m.split('-').map(Number);
+    return `${y - 1}-${String(mo).padStart(2, '0')}`;
+  };
  
   c.innerHTML = `
     <div class="page-header">
@@ -189,14 +485,17 @@ function renderCost(c, month) {
       <div class="table-wrap">
         <table>
           <thead><tr>
-            <th>Month</th><th>Utility Cost (₱)</th><th>R&M Cost (₱)</th><th>Volume (MT)</th>
-            <th>Util / Kg</th><th>R&M / Kg</th><th>Engg / Kg</th>
+            <th>Month</th><th>Utility Cost (₱ thousands)</th><th>R&M Cost (₱ thousands)</th><th>Volume (MT)</th>
+            <th>Util / Kg</th><th>R&M / Kg</th><th>Engg / Kg</th><th>Prior Year Engg / Kg</th><th>YoY Var %</th>
           </tr></thead>
           <tbody>
             ${rows.length ? rows.map(r => {
               const upk = calcUtilCostPerKg(r.utility_cost, r.volume);
               const rpk = calcRMCostPerKg(r.rm_cost, r.volume);
               const epk = calcEnggCostPerKg(r.utility_cost, r.rm_cost, r.volume);
+              const prior = rowsByMonth[previousYearMonth(r.month)];
+              const priorEpk = prior ? calcEnggCostPerKg(prior.utility_cost, prior.rm_cost, prior.volume) : null;
+              const yoy = epk != null && priorEpk != null && priorEpk !== 0 ? (epk - priorEpk) / Math.abs(priorEpk) : null;
               return `<tr>
                 <td><strong>${fmtMonthLabel(r.month)}</strong></td>
                 <td class="td-number">${r.utility_cost != null ? fmtN(r.utility_cost,2) : '—'}</td>
@@ -205,8 +504,10 @@ function renderCost(c, month) {
                 <td class="td-number">${fmt(upk,3)}</td>
                 <td class="td-number">${fmt(rpk,3)}</td>
                 <td class="td-number">${fmt(epk,3)}</td>
+                <td class="td-number">${fmt(priorEpk,3)}</td>
+                <td class="td-number ${yoy!==null?(yoy>0?'td-red':'td-green'):''}">${yoy!==null?((yoy*100).toFixed(1)+'%'):'—'}</td>
               </tr>`;
-            }).join('') : '<tr><td colspan="7"><div class="empty"><p>No data yet. Enter data via the Data Entry section.</p></div></td></tr>'}
+            }).join('') : '<tr><td colspan="9"><div class="empty"><p>No data yet. Enter data via the Data Entry section.</p></div></td></tr>'}
           </tbody>
         </table>
       </div>
@@ -220,6 +521,10 @@ function renderCost(c, month) {
     const utilPK = rows.map(r=>calcUtilCostPerKg(r.utility_cost,r.volume));
     const rmPK = rows.map(r=>calcRMCostPerKg(r.rm_cost,r.volume));
     const enggPK = rows.map(r=>calcEnggCostPerKg(r.utility_cost,r.rm_cost,r.volume));
+    const priorEnggPK = rows.map(r => {
+      const prior = rowsByMonth[previousYearMonth(r.month)];
+      return prior ? calcEnggCostPerKg(prior.utility_cost, prior.rm_cost, prior.volume) : null;
+    });
     charts['costChart'] = new Chart(ctx, {
       type: 'bar',
       data: {
@@ -227,7 +532,8 @@ function renderCost(c, month) {
         datasets: [
           { label: 'Util/Kg', data: utilPK, backgroundColor: 'rgba(26,86,219,0.7)' },
           { label: 'R&M/Kg', data: rmPK, backgroundColor: 'rgba(217,119,6,0.7)' },
-          { type: 'line', label: 'Engg/Kg', data: enggPK, borderColor: '#7c3aed', borderDash:[4,3], pointRadius:3, fill:false, tension:0.3 }
+          { type: 'line', label: 'Engg/Kg', data: enggPK, borderColor: '#7c3aed', borderDash:[4,3], pointRadius:3, fill:false, tension:0.3 },
+          { type: 'line', label: 'Prior Year Engg/Kg', data: priorEnggPK, borderColor: '#64748b', borderDash:[2,4], pointRadius:2, fill:false, tension:0.3 }
         ]
       },
       options: {
@@ -318,7 +624,7 @@ function renderProduction(c, month) {
           return `<div class="metric-card" style="border-left:3px solid ${color}">
             <div class="metric-label">${r.line}</div>
             <div class="metric-value" style="color:${color};font-size:22px">${pct}</div>
-            <div class="metric-sub">${fmtN(r.act, 0)} / ${fmtN(r.cap, 0)} units</div>
+            <div class="metric-sub">${fmtN(r.act, 0)} / ${fmtN(r.cap, 0)} units${r.machine_availability != null ? ` · Avail ${(r.machine_availability*100).toFixed(2)}%` : ''}</div>
           </div>`;
         }).join('')}
       </div>
@@ -399,7 +705,7 @@ function renderProduction(c, month) {
       <div class="card-title" style="margin-bottom:14px">Monthly Efficiency by Line</div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Month</th><th>Line</th><th>Capacity (units)</th><th>Actual Output (units)</th><th>Efficiency %</th><th>Status</th></tr></thead>
+          <thead><tr><th>Month</th><th>Line</th><th>Capacity (units)</th><th>Actual Output (units)</th><th>Efficiency %</th><th>Machine Avail.</th><th>Status</th></tr></thead>
           <tbody>
             ${rows.length ? rows.map(r => {
               const eff = calcEfficiency(r.capacity, r.actual_output);
@@ -411,9 +717,10 @@ function renderProduction(c, month) {
                 <td class="td-number">${fmtN(r.capacity, 0)}</td>
                 <td class="td-number">${fmtN(r.actual_output, 0)}</td>
                 <td class="td-number"><strong>${pct}</strong></td>
+                <td class="td-number">${r.machine_availability != null ? (r.machine_availability*100).toFixed(2)+'%' : '—'}</td>
                 <td><span class="pill pill-${statusClass}">${eff === null ? 'N/A' : eff >= 0.95 ? 'On Target' : eff >= 0.85 ? 'Watch' : 'Below Target'}</span></td>
               </tr>`;
-            }).join('') : '<tr><td colspan="6"><div class="empty"><p>No capacity data. Use Capacity & Efficiency entry.</p></div></td></tr>'}
+            }).join('') : '<tr><td colspan="7"><div class="empty"><p>No capacity data. Use Capacity & Efficiency entry.</p></div></td></tr>'}
           </tbody>
         </table>
       </div>
@@ -473,6 +780,7 @@ function renderWeeklyPanel(line, month, visible) {
       <td class="td-number">${fmtN(w.cap, 0)}</td>
       <td class="td-number">${fmtN(w.act, 0)}</td>
       <td class="td-number"><strong class="${cls}">${pct}</strong></td>
+      <td class="td-number">${w.machine_availability != null ? (w.machine_availability*100).toFixed(2)+'%' : '—'}</td>
       <td><span class="pill pill-${eff === null ? 'gray' : eff > 1.0 ? 'blue' : eff >= 0.95 ? 'green' : eff >= 0.85 ? 'amber' : 'red'}">${eff === null ? 'N/A' : eff > 1.0 ? 'Exceeded' : eff >= 0.95 ? 'On Target' : eff >= 0.85 ? 'Watch' : 'Below'}</span></td>
     </tr>`;
   }).join('');
@@ -489,7 +797,7 @@ function renderWeeklyPanel(line, month, visible) {
       </div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Month</th><th>Week</th><th>Capacity</th><th>Actual</th><th>Efficiency</th><th>Status</th></tr></thead>
+          <thead><tr><th>Month</th><th>Week</th><th>Capacity</th><th>Actual</th><th>Efficiency</th><th>Machine Avail.</th><th>Status</th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
       </div>
@@ -589,11 +897,16 @@ function renderManhours(c, month) {
   const weeklyRunrateRows = getWeeklyRunrateRows(runrateMonth);
 
   let totalCapacity = 0, totalOutput = 0;
+  const machineAvailabilityValues = [];
   runrateRows.forEach(r => {
     totalCapacity += r.capacity || 0;
     totalOutput += r.actual_output || 0;
+    if (r.machine_availability != null) machineAvailabilityValues.push(Number(r.machine_availability));
   });
   const runrateEff = calcEfficiency(totalCapacity, totalOutput);
+  const avgMachineAvailability = machineAvailabilityValues.length
+    ? machineAvailabilityValues.reduce((a, b) => a + b, 0) / machineAvailabilityValues.length
+    : null;
  
   // aggregate
   let totPR=0,totAR=0,totPOT=0,totAOT=0,totAbs=0, totPersonDays=0;
@@ -611,6 +924,7 @@ function renderManhours(c, month) {
     if (r.manpower != null) manpowerValues.push(Number(r.manpower));
   });
   const regUtil=calcRegHrsUtil(totAR,totPR), otUtil=calcOTUtil(totAOT,totPOT);
+  const otRate = calcOTRate(totAOT, totAR);
   const totalMhUtil = calcTotalManhoursUtil(totAR, totAOT, totPR, totPOT);
   const plannedPersonDays = totPR > 0 ? totPR / 8 : 0;
   const absPct = totPersonDays > 0 ? totAbs / totPersonDays : (plannedPersonDays > 0 ? totAbs / plannedPersonDays : null);
@@ -631,6 +945,7 @@ function renderManhours(c, month) {
   const trendLabels = trendRows.map(r=>fmtMonthLabel(r.month));
   const trendReg = trendRows.map(r=>calcRegHrsUtil(r.ar,r.pr));
   const trendOT = trendRows.map(r=>calcOTUtil(r.aot,r.pot));
+  const trendOTRate = trendRows.map(r=>calcOTRate(r.aot,r.ar));
 
   // ── Quarterly summary (computed dynamically from all monthly records) ─────────
   function fiscalQuarter(isoMonth) {
@@ -648,22 +963,27 @@ function renderManhours(c, month) {
   }
   const runrateTrendByMonth = {};
   allRunrateRows.forEach(r => {
-    if (!runrateTrendByMonth[r.month]) runrateTrendByMonth[r.month] = { month: r.month, cap: 0, act: 0 };
+    if (!runrateTrendByMonth[r.month]) runrateTrendByMonth[r.month] = { month: r.month, cap: 0, act: 0, availability: [] };
     runrateTrendByMonth[r.month].cap += r.capacity || 0;
     runrateTrendByMonth[r.month].act += r.actual_output || 0;
+    if (r.machine_availability != null) runrateTrendByMonth[r.month].availability.push(Number(r.machine_availability));
   });
   const runrateTrendRows = Object.values(runrateTrendByMonth).sort((a, b) => String(a.month).localeCompare(String(b.month)));
   const runrateTrendLabels = runrateTrendRows.map(r => fmtMonthLabel(r.month));
   const runrateTrendCap = runrateTrendRows.map(r => r.cap);
   const runrateTrendAct = runrateTrendRows.map(r => r.act);
   const runrateTrendEff = runrateTrendRows.map(r => calcEfficiency(r.cap, r.act));
+  const runrateTrendAvailability = runrateTrendRows.map(r => r.availability.length
+    ? r.availability.reduce((a, b) => a + b, 0) / r.availability.length
+    : null);
 
   const runrateLineTotals = {};
   runrateRows.forEach(r => {
     const line = r.line || 'Plant-wide';
-    if (!runrateLineTotals[line]) runrateLineTotals[line] = { line, cap: 0, act: 0 };
+    if (!runrateLineTotals[line]) runrateLineTotals[line] = { line, cap: 0, act: 0, availability: [] };
     runrateLineTotals[line].cap += r.capacity || 0;
     runrateLineTotals[line].act += r.actual_output || 0;
+    if (r.machine_availability != null) runrateLineTotals[line].availability.push(Number(r.machine_availability));
   });
   const runrateLineRows = Object.values(runrateLineTotals).sort((a, b) => String(a.line).localeCompare(String(b.line)));
   const runrateLineLabels = runrateLineRows.map(r => r.line);
@@ -742,6 +1062,11 @@ function renderManhours(c, month) {
           <div class="metric-sub">${totalCapacity > 0 ? `${fmtN(totalOutput,0)} / ${fmtN(totalCapacity,0)}` : 'No runrate data'}</div>
           <div class="progress-bar"><div class="progress-fill ${runrateEff>=0.95?'progress-green':runrateEff>=0.85?'progress-amber':'progress-red'}" style="width:${runrateEff?Math.min(runrateEff*100,100):0}%"></div></div>
         </div>
+        <div class="metric-card">
+          <div class="metric-label">Machine Availability</div>
+          <div class="metric-value">${avgMachineAvailability !== null ? (avgMachineAvailability*100).toFixed(2)+'%' : '&mdash;'}</div>
+          <div class="metric-sub">${machineAvailabilityValues.length ? `${fmtN(machineAvailabilityValues.length,0)} availability records` : 'No availability data'}</div>
+        </div>
       </div>
     </div>
 
@@ -787,7 +1112,7 @@ function renderManhours(c, month) {
       <div class="card-title" style="margin-bottom:14px">Monthly Runrate by Line</div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Month</th><th>Line</th><th>Capacity</th><th>Actual</th><th>Efficiency</th><th>Weekly Rows</th></tr></thead>
+          <thead><tr><th>Month</th><th>Line</th><th>Capacity</th><th>Actual</th><th>Efficiency</th><th>Machine Avail.</th><th>Weekly Rows</th></tr></thead>
           <tbody>
             ${runrateRows.length ? runrateRows.map(r => {
               const eff = calcEfficiency(r.capacity, r.actual_output);
@@ -797,9 +1122,10 @@ function renderManhours(c, month) {
                 <td class="td-number">${fmtN(r.capacity,0)}</td>
                 <td class="td-number">${fmtN(r.actual_output,0)}</td>
                 <td class="td-number"><strong class="${eff&&eff>=0.95?'td-green':eff&&eff<0.85?'td-red':''}">${eff!==null?(eff*100).toFixed(2)+'%':'&mdash;'}</strong></td>
+                <td class="td-number">${r.machine_availability != null ? (r.machine_availability*100).toFixed(2)+'%' : '&mdash;'}</td>
                 <td class="td-number">${r.weekly_count ? fmtN(r.weekly_count,0) : 'monthly total'}</td>
               </tr>`;
-            }).join('') : '<tr><td colspan="6"><div class="empty"><p>No runrate data yet.</p></div></td></tr>'}
+            }).join('') : '<tr><td colspan="7"><div class="empty"><p>No runrate data yet.</p></div></td></tr>'}
           </tbody>
         </table>
       </div>
@@ -809,7 +1135,7 @@ function renderManhours(c, month) {
       <div class="card-title" style="margin-bottom:14px">Weekly Runrate Details</div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Month</th><th>Line</th><th>Week</th><th>Capacity</th><th>Actual</th><th>Efficiency</th></tr></thead>
+          <thead><tr><th>Month</th><th>Line</th><th>Week</th><th>Capacity</th><th>Actual</th><th>Efficiency</th><th>Machine Avail.</th></tr></thead>
           <tbody>
             ${weeklyRunrateRows.length ? weeklyRunrateRows.map(r => {
               const eff = calcEfficiency(r.capacity, r.actual_output);
@@ -820,8 +1146,9 @@ function renderManhours(c, month) {
                 <td class="td-number">${fmtN(r.capacity,0)}</td>
                 <td class="td-number">${fmtN(r.actual_output,0)}</td>
                 <td class="td-number"><strong class="${eff&&eff>=0.95?'td-green':eff&&eff<0.85?'td-red':''}">${eff!==null?(eff*100).toFixed(2)+'%':'&mdash;'}</strong></td>
+                <td class="td-number">${r.machine_availability != null ? (r.machine_availability*100).toFixed(2)+'%' : '&mdash;'}</td>
               </tr>`;
-            }).join('') : '<tr><td colspan="6"><div class="empty"><p>No weekly runrate data yet.</p></div></td></tr>'}
+            }).join('') : '<tr><td colspan="7"><div class="empty"><p>No weekly runrate data yet.</p></div></td></tr>'}
           </tbody>
         </table>
       </div>
@@ -842,6 +1169,11 @@ function renderManhours(c, month) {
         <div class="metric-value">${otUtil !== null ? (otUtil*100).toFixed(2)+'%' : '—'}</div>
         <div class="metric-sub">${fmtN(totAOT,1)} / ${fmtN(totPOT,0)} hrs</div>
         <div class="progress-bar"><div class="progress-fill ${otUtil>=0.9?'progress-green':otUtil>=0.7?'progress-amber':'progress-red'}" style="width:${otUtil?Math.min(otUtil*100,100):0}%"></div></div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">OT Rate</div>
+        <div class="metric-value">${otRate !== null ? (otRate*100).toFixed(2)+'%' : '—'}</div>
+        <div class="metric-sub">OT share of actual manhours</div>
       </div>
       <div class="metric-card">
         <div class="metric-label">Total Absenteeism</div>
@@ -891,12 +1223,13 @@ function renderManhours(c, month) {
       <div class="card-title" style="margin-bottom:14px">Quarterly Manhours Summary</div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Quarter</th><th>Months</th><th>Person-Days</th><th>Planned Reg</th><th>Actual Reg</th><th>Reg Util%</th><th>Planned OT</th><th>Actual OT</th><th>OT Util%</th><th>Absenteeism</th><th>Absent %</th></tr></thead>
+          <thead><tr><th>Quarter</th><th>Months</th><th>Person-Days</th><th>Planned Reg</th><th>Actual Reg</th><th>Reg Util%</th><th>Planned OT</th><th>Actual OT</th><th>OT Util%</th><th>OT Rate</th><th>Absenteeism</th><th>Absent %</th></tr></thead>
           <tbody>
             ${mhQKeys.map(k => {
               const q = mhByQuarter[k];
               const ru = calcRegHrsUtil(q.ar, q.pr);
               const ou = calcOTUtil(q.aot, q.pot);
+              const otr = calcOTRate(q.aot, q.ar);
               const personDays = q.personDays > 0 ? q.personDays : (q.pr > 0 ? q.pr / 8 : null);
               const absRate = personDays > 0 && q.abs != null ? q.abs / personDays : null;
               return `<tr>
@@ -909,6 +1242,7 @@ function renderManhours(c, month) {
                 <td class="td-number">${fmtN(q.pot,0)}</td>
                 <td class="td-number">${fmtN(q.aot,1)}</td>
                 <td class="td-number"><strong>${ou!==null?(ou*100).toFixed(2)+'%':'—'}</strong></td>
+                <td class="td-number"><strong>${otr!==null?(otr*100).toFixed(2)+'%':'—'}</strong></td>
                 <td class="td-number">${fmtN(q.abs,0)}</td>
                 <td class="td-number">${absRate!==null?(absRate*100).toFixed(2)+'%':'—'}</td>
               </tr>`;
@@ -921,7 +1255,7 @@ function renderManhours(c, month) {
       <div class="card-title" style="margin-bottom:14px">Records by Line</div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Month</th><th>Line</th><th>Working Days</th><th>Manpower</th><th>Person-Days</th><th>Planned Reg</th><th>Actual Reg</th><th>Reg Util%</th><th>Planned OT</th><th>Actual OT</th><th>OT Util%</th><th>Total Util%</th><th>Absent</th><th>Absent %</th></tr></thead>
+          <thead><tr><th>Month</th><th>Line</th><th>Working Days</th><th>Manpower</th><th>Person-Days</th><th>Planned Reg</th><th>Actual Reg</th><th>Reg Util%</th><th>Planned OT</th><th>Actual OT</th><th>OT Util%</th><th>OT Rate</th><th>Total Util%</th><th>Absent</th><th>Absent %</th></tr></thead>
           <tbody>
             ${rows.length ? rows.map(r=>{
               const ru=calcRegHrsUtil(r.actual_reg,r.planned_reg), ou=calcOTUtil(r.actual_ot,r.planned_ot);
@@ -930,6 +1264,7 @@ function renderManhours(c, month) {
                 ? r.absenteeism / rowPersonDays
                 : calcAbsenteeismRate(r.absenteeism, r.working_days, r.manpower, r.planned_reg);
               const totalUtil = calcTotalManhoursUtil(r.actual_reg, r.actual_ot, r.planned_reg, r.planned_ot);
+              const rowOTRate = calcOTRate(r.actual_ot, r.actual_reg);
               return `<tr>
                 <td>${fmtMonthLabel(r.month)}</td>
                 <td>${r.line||'—'}</td>
@@ -942,11 +1277,12 @@ function renderManhours(c, month) {
                 <td class="td-number">${fmtN(r.planned_ot,0)}</td>
                 <td class="td-number">${fmtN(r.actual_ot,1)}</td>
                 <td class="td-number"><strong>${ou!==null?(ou*100).toFixed(2)+'%':'—'}</strong></td>
+                <td class="td-number"><strong>${rowOTRate!==null?(rowOTRate*100).toFixed(2)+'%':'—'}</strong></td>
                 <td class="td-number"><strong>${totalUtil!==null?(totalUtil*100).toFixed(2)+'%':'—'}</strong></td>
                 <td class="td-number">${r.absenteeism!=null?fmtN(r.absenteeism,1):'—'}</td>
                 <td class="td-number">${rowAbsPct!==null?((rowAbsPct*100).toFixed(2)+'%'):'—'}</td>
               </tr>`;
-            }).join('') : '<tr><td colspan="14"><div class="empty"><p>No manhours data yet.</p></div></td></tr>'}
+            }).join('') : '<tr><td colspan="15"><div class="empty"><p>No manhours data yet.</p></div></td></tr>'}
           </tbody>
         </table>
       </div>
@@ -963,7 +1299,8 @@ function renderManhours(c, month) {
         datasets: [
           { label: 'Capacity', data: runrateTrendCap, backgroundColor: 'rgba(59,130,246,0.35)', borderRadius: 4, yAxisID: 'y' },
           { label: 'Actual', data: runrateTrendAct, backgroundColor: 'rgba(20,184,166,0.55)', borderRadius: 4, yAxisID: 'y' },
-          { type: 'line', label: 'Efficiency %', data: runrateTrendEff.map(v => v === null ? null : v * 100), borderColor: '#d97706', borderWidth: 2, tension: 0.3, pointRadius: 3, yAxisID: 'yPct' }
+          { type: 'line', label: 'Efficiency %', data: runrateTrendEff.map(v => v === null ? null : v * 100), borderColor: '#d97706', borderWidth: 2, tension: 0.3, pointRadius: 3, yAxisID: 'yPct' },
+          { type: 'line', label: 'Machine Avail. %', data: runrateTrendAvailability.map(v => v === null ? null : v * 100), borderColor: '#7c3aed', borderDash: [3, 3], borderWidth: 2, tension: 0.3, pointRadius: 3, yAxisID: 'yPct' }
         ]
       },
       options: {
@@ -1011,7 +1348,8 @@ function renderManhours(c, month) {
       type:'line',
       data:{labels:trendLabels,datasets:[
         {label:'Reg Util%',data:trendReg.map(v=>v?v*100:null),borderColor:'#1a56db',tension:0.3,pointRadius:3},
-        {label:'OT Util%',data:trendOT.map(v=>v?v*100:null),borderColor:'#d97706',borderDash:[4,3],tension:0.3,pointRadius:3}
+        {label:'OT Util%',data:trendOT.map(v=>v?v*100:null),borderColor:'#d97706',borderDash:[4,3],tension:0.3,pointRadius:3},
+        {label:'OT Rate%',data:trendOTRate.map(v=>v?v*100:null),borderColor:'#7c3aed',borderDash:[2,3],tension:0.3,pointRadius:3}
       ]},
       options:{responsive:true,maintainAspectRatio:false,
         plugins:{legend:{labels:{font:{size:11},boxWidth:10}}},
@@ -1174,7 +1512,7 @@ function renderLoss(c, month) {
   const hasData = rows.length > 0;
 
   // Helper: colour class for contribution cells
-  const contribClass = pct => pct > 0.5 ? 'td-red' : pct > 0.25 ? 'var(--amber)' : '';
+  const contribClass = pct => pct > 0.5 ? 'td-red' : pct > 0.25 ? 'td-amber' : '';
 
   c.innerHTML = `
     <div class="page-header">
@@ -1284,9 +1622,9 @@ function renderLoss(c, month) {
               <td class="td-number">${r.runrateLoss != null ? (r.runrateLoss*100).toFixed(2)+'%' : '—'}</td>
               <td class="td-number">${r.absLoss    != null ? (r.absLoss*100).toFixed(2)+'%'     : '—'}</td>
               <td class="td-number">${r.mhLoss     != null ? (r.mhLoss*100).toFixed(2)+'%'      : '—'}</td>
-              <td class="td-number td-red" style="border-left:2px solid var(--gray-200)">${r.runPct != null ? (r.runPct*100).toFixed(1)+'%' : '—'}</td>
-              <td class="td-number td-red">${r.absPct != null ? (r.absPct*100).toFixed(1)+'%' : '—'}</td>
-              <td class="td-number td-red">${r.mhPct  != null ? (r.mhPct*100).toFixed(1)+'%'  : '—'}</td>
+              <td class="td-number ${contribClass(r.runPct)}" style="border-left:2px solid var(--gray-200)">${r.runPct != null ? (r.runPct*100).toFixed(1)+'%' : '—'}</td>
+              <td class="td-number ${contribClass(r.absPct)}">${r.absPct != null ? (r.absPct*100).toFixed(1)+'%' : '—'}</td>
+              <td class="td-number ${contribClass(r.mhPct)}">${r.mhPct  != null ? (r.mhPct*100).toFixed(1)+'%'  : '—'}</td>
             </tr>`).join('')
             : '<tr><td colspan="8"><div class="empty"><p>No data yet.</p></div></td></tr>'}
           </tbody>
@@ -1334,23 +1672,23 @@ function renderBudget(c, month) {
  
   c.innerHTML = `
     <div class="page-header">
-      <h1>Budget vs Actual</h1>
-      <p>Variance = Actual − Budget — ${mLabel}</p>
+      <h1>OB vs Actual</h1>
+      <p>Compare ACT results against OB/target values — ${mLabel}</p>
     </div>
     <div class="card section-gap">
-      <div class="card-title" style="margin-bottom:14px">Budget vs Actual</div>
+      <div class="card-title" style="margin-bottom:14px">OB vs Actual</div>
       <div class="chart-container">
-        <canvas id="budgetChart" aria-label="Budget vs actual bar chart">Budget vs actual comparison</canvas>
+        <canvas id="budgetChart" aria-label="OB vs actual bar chart">OB vs actual comparison</canvas>
       </div>
     </div>
     <div class="card">
-      <div class="card-title" style="margin-bottom:14px">Budget Variance Records</div>
+      <div class="card-title" style="margin-bottom:14px">OB Variance Records</div>
       <div class="table-wrap">
         <table>
           <thead><tr><th>Month</th>
-            <th>Util Budget</th><th>Util Actual</th><th>Util Var (₱)</th><th>Util Var %</th>
-            <th>R&M Budget</th><th>R&M Actual</th><th>R&M Var (₱)</th><th>R&M Var %</th>
-            <th>Vol Budget (MT)</th><th>Vol Actual (MT)</th><th>Vol Var</th><th>Vol Var %</th>
+            <th>Util OB (₱ thousands)</th><th>Util Actual (₱ thousands)</th><th>Util Var (₱ thousands)</th><th>Util Var %</th>
+            <th>R&M OB (₱ thousands)</th><th>R&M Actual (₱ thousands)</th><th>R&M Var (₱ thousands)</th><th>R&M Var %</th>
+            <th>Vol OB (MT)</th><th>Vol Actual (MT)</th><th>Vol Var</th><th>Vol Var %</th>
           </tr></thead>
           <tbody>
             ${rows.length ? rows.map(r=>{
@@ -1375,7 +1713,7 @@ function renderBudget(c, month) {
                 <td class="td-number ${vv!==null?(vv<0?'td-red':'td-green'):''}"><strong>${vv!==null?fmtN(vv,3):'—'}</strong></td>
                 <td class="td-number ${vvp!==null?(vvp<0?'td-red':'td-green'):''}">${vvp!==null?((vvp*100).toFixed(1)+'%'):'—'}</td>
               </tr>`;
-            }).join('') : '<tr><td colspan="13"><div class="empty"><p>No budget data. Enter budgets first.</p></div></td></tr>'}
+            }).join('') : '<tr><td colspan="13"><div class="empty"><p>No OB/target data. Import an OB workbook or enter targets first.</p></div></td></tr>'}
           </tbody>
         </table>
       </div>
@@ -1393,9 +1731,9 @@ function renderBudget(c, month) {
       data: {
         labels, 
         datasets: [
-          { label: 'Util Budget', data: ubud, backgroundColor: '#bfdbfe', borderRadius: 4, barPercentage: 0.6 },
+          { label: 'Util OB', data: ubud, backgroundColor: '#bfdbfe', borderRadius: 4, barPercentage: 0.6 },
           { label: 'Util Actual', data: uact, backgroundColor: '#3b82f6', borderRadius: 4, barPercentage: 0.6 },
-          { label: 'R&M Budget', data: rbud, backgroundColor: '#fcd34d', borderRadius: 4, barPercentage: 0.6 },
+          { label: 'R&M OB', data: rbud, backgroundColor: '#fcd34d', borderRadius: 4, barPercentage: 0.6 },
           { label: 'R&M Actual', data: ract, backgroundColor: '#f59e0b', borderRadius: 4, barPercentage: 0.6 }
         ]
       },

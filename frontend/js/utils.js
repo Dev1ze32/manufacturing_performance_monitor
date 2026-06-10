@@ -39,6 +39,33 @@ export function setVal(id,v){ const el=document.getElementById(id); if(el) el.va
 export function parseN(id){ const v=parseFloat(val(id)); return isNaN(v)?null:v; }
 export function clearForm(ids){ ids.forEach(id=>setVal(id,'')); }
 
+export function normalizeLineName(value) {
+  const cleaned = value == null ? '' : String(value).replace(/\s+/g, ' ').trim();
+  if (!cleaned) return '';
+
+  const compact = cleaned
+    .replace(/^Q\d+\s+/i, '')
+    .replace(/\b(APRIL|MAY|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER|JANUARY|FEBRUARY|MARCH)\b.*$/i, '')
+    .replace(/\bRUNRATE\b.*$/i, '')
+    .replace(/\bMANHOURS\b.*$/i, '')
+    .trim();
+
+  const shortLine = compact.match(/\bL(?:INE)?\s*(\d+)\s+(.+)$/i);
+  if (shortLine) {
+    const product = shortLine[2].trim();
+    if (/ELASTOSEAL|ES\b/i.test(product)) return `Line ${shortLine[1]} ES`;
+    if (/EPOXY/i.test(product)) return `Line ${shortLine[1]} Epoxy`;
+    if (/\bBB\b/i.test(product)) return `Line ${shortLine[1]} BB`;
+    return `Line ${shortLine[1]} ${titleCase(product)}`;
+  }
+
+  return titleCase(compact).replace(/\bEs\b/g, 'ES').replace(/\bBb\b/g, 'BB');
+}
+
+function titleCase(value) {
+  return String(value).toLowerCase().replace(/\b\w/g, m => m.toUpperCase());
+}
+
 // Module-level source of truth for the selected month.
 // No longer depends on <select> having matching <option> elements loaded.
 let _globalMonth = '';
@@ -234,6 +261,10 @@ export function calcEnggCostPerKg(util_cost, rm_cost, volume) { return (!volume 
 export function calcEfficiency(capacity, actual) { return (!capacity || capacity === 0) ? null : actual / capacity; }
 export function calcRegHrsUtil(actual_reg, planned_reg) { return (!planned_reg || planned_reg === 0) ? null : actual_reg / planned_reg; }
 export function calcOTUtil(actual_ot, planned_ot) { return (!planned_ot || planned_ot === 0) ? null : actual_ot / planned_ot; }
+export function calcOTRate(actual_ot, actual_reg) {
+  const total = (actual_ot || 0) + (actual_reg || 0);
+  return total <= 0 ? null : (actual_ot || 0) / total;
+}
 export function calcPersonDays(working_days, manpower) {
   return (!working_days || !manpower || working_days <= 0 || manpower <= 0) ? null : working_days * manpower;
 }

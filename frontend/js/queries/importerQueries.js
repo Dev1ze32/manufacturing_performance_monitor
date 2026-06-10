@@ -23,15 +23,38 @@ export function upsertImportedBudget(month, utilityBudget, rmBudget, volumeBudge
     [month, utilityBudget, rmBudget, volumeBudget]);
 }
 
+export function upsertImportedCapacity(record) {
+  return run(`INSERT INTO capacity (month, line, capacity, actual_output, machine_availability) VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(month, line) DO UPDATE SET
+        capacity = COALESCE(excluded.capacity, capacity.capacity),
+        actual_output = COALESCE(excluded.actual_output, capacity.actual_output),
+        machine_availability = COALESCE(excluded.machine_availability, capacity.machine_availability)`,
+    [
+      record.month,
+      record.line || '',
+      record.capacity,
+      record.actual_output,
+      record.machine_availability
+    ]);
+}
+
 export function upsertImportedWeeklyCapacity(record) {
-  const saved = run(`INSERT INTO capacity_weekly (month, line, week_label, week_num, capacity, actual_output) VALUES (?, ?, ?, ?, ?, ?)
+  const saved = run(`INSERT INTO capacity_weekly (month, line, week_label, week_num, capacity, actual_output, machine_availability) VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(month, line, week_label) DO UPDATE SET
         week_num = excluded.week_num,
         capacity = COALESCE(excluded.capacity, capacity_weekly.capacity),
-        actual_output = COALESCE(excluded.actual_output, capacity_weekly.actual_output)`,
-    [record.month, record.line, record.week_label, record.week_num, record.capacity, record.actual_output]);
+        actual_output = COALESCE(excluded.actual_output, capacity_weekly.actual_output),
+        machine_availability = COALESCE(excluded.machine_availability, capacity_weekly.machine_availability)`,
+    [
+      record.month,
+      record.line,
+      record.week_label,
+      record.week_num,
+      record.capacity,
+      record.actual_output,
+      record.machine_availability
+    ]);
 
-  if (saved) run('DELETE FROM capacity WHERE month = ? AND line = ?', [record.month, record.line]);
   return saved;
 }
 

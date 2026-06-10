@@ -1,12 +1,13 @@
 import {
   upsertImportedBudget,
+  upsertImportedCapacity,
   upsertImportedLoss,
   upsertImportedManhours,
   upsertImportedProduction,
   upsertImportedUtility,
   upsertImportedWeeklyCapacity
 } from './queries/importerQueries.js';
-import { fmtMonthLabel, populateMonthFilter, showToast, calcPlannedRegHours, calcPlannedOTHours } from './utils.js';
+import { fmtMonthLabel, populateMonthFilter, showToast, calcPlannedRegHours, calcPlannedOTHours, normalizeLineName } from './utils.js';
 
 const MONTHS = {
   jan: 1, january: 1,
@@ -39,7 +40,7 @@ function renderImport(c) {
 
     <div class="card section-gap">
       <div class="info-block">
-        <strong>Supported patterns:</strong> utilities workbooks with ACT/OB fiscal period columns, runrate efficiency blocks with weekly capacity/actual rows, and monthly manhours blocks with working days/manpower formulas.
+        <strong>Supported patterns:</strong> utilities workbooks with ACT/OB fiscal period columns, runrate efficiency blocks with weekly capacity/actual rows, optional machine availability rows, and monthly manhours blocks with working days/manpower formulas.
       </div>
       <div class="form-section">
         <div class="form-section-title">Workbook Import</div>
@@ -178,16 +179,32 @@ function parsePeriodMetricSheet(sheet, parsed) {
     const metric = classifyPeriodMetric(label);
     if (!metric) continue;
 
-    activePeriods.forEach((period, c) => {
-      const value = toNumber(getCellValue(sheet, r, c));
-      if (value == null) return;
-      // Skip zero cost/volume values — they indicate unfilled future months
-      if (value === 0) return;
+    const entries = [...activePeriods.entries()]
+      .sort(([a], [b]) => a - b)
+      .map(([c, period]) => ({ c, period, value: toNumber(getCellValue(sheet, r, c)) }))
+      .filter(entry => entry.value != null);
+
+    const lastNonZeroBySeries = new Map();
+    entries.forEach((entry, index) => {
+      if (entry.value !== 0) lastNonZeroBySeries.set(periodSeriesKey(entry.period), index);
+    });
+
+    entries.forEach((entry, index) => {
+      const { period, value } = entry;
+      const lastNonZero = lastNonZeroBySeries.get(periodSeriesKey(period));
+      if (value === 0 && (lastNonZero == null || index > lastNonZero)) return;
 
       if (period.source === 'ACT') {
         if (metric === 'utility') upsertMap(parsed.utilities, period.month, { utility_cost: value });
         if (metric === 'rm') upsertMap(parsed.utilities, period.month, { rm_cost: value });
         if (metric === 'volume') upsertMap(parsed.production, period.month, { volume: value });
+        if (metric === 'machine_availability') {
+          upsertMap(parsed.capacity, keyed(period.month, ''), {
+            month: period.month,
+            line: '',
+            machine_availability: normalizePercent(value)
+          });
+        }
       }
 
       if (period.source === 'OB') {
@@ -227,6 +244,8 @@ function parseCapacityBlock(sheet, parsed, defaultFy, headingRow, startCol, rang
   // Use full sheet range — multi-month blocks (e.g. Q3 = Apr/May/Jun) can span
   // 45+ rows from the heading row, so the old +40 cutoff silently dropped June data.
   const endRow = range.e.r;
+  let currentMonth = '';
+  const weeklyRecords = [];
 
   for (let r = headingRow + 1; r <= endRow; r++) {
     const rawLabel = cleanText(getCellValue(sheet, r, startCol));
@@ -237,6 +256,21 @@ function parseCapacityBlock(sheet, parsed, defaultFy, headingRow, startCol, rang
 
     // ── Monthly total row ────────────────────────────────────────────────────
     if (isMonthName(rawLabel)) {
+      currentMonth = monthNameToIso(rawLabel, defaultFy);
+      continue;
+    }
+
+    if (/MACHINE\s+AVAIL/i.test(rawLabel) && currentMonth) {
+      const availability = normalizePercent(
+        toNumber(getCellValue(sheet, r, startCol + 1)) ?? toNumber(getCellValue(sheet, r, startCol + 2))
+      );
+      if (availability != null) {
+        upsertMap(parsed.capacity, keyed(currentMonth, line), {
+          month: currentMonth,
+          line,
+          machine_availability: availability
+        });
+      }
       continue;
     }
 
@@ -250,14 +284,22 @@ function parseCapacityBlock(sheet, parsed, defaultFy, headingRow, startCol, rang
       const capacity   = toNumber(getCellValue(sheet, r, startCol + 1));
       const actual     = toNumber(getCellValue(sheet, r, startCol + 2));
       if (capacity == null && actual == null) continue;
-      if (capacity === 0 && actual === 0) continue;      // skip empty future weeks
-      upsertMap(
-        parsed.capacity_weekly,
-        keyed(month, line) + '::' + weekLabel,
-        { month, line, week_label: weekLabel, week_num: weekNum, capacity, actual_output: actual }
-      );
+      weeklyRecords.push({ rowIndex: r, month, line, week_label: weekLabel, week_num: weekNum, capacity, actual_output: actual });
     }
   }
+
+  const lastNonZeroIndex = weeklyRecords.reduce((last, record, index) => {
+    return record.capacity !== 0 || record.actual_output !== 0 ? index : last;
+  }, -1);
+
+  weeklyRecords.forEach((record, index) => {
+    if (record.capacity === 0 && record.actual_output === 0 && (lastNonZeroIndex < 0 || index > lastNonZeroIndex)) return;
+    upsertMap(
+      parsed.capacity_weekly,
+      keyed(record.month, record.line) + '::' + record.week_label,
+      record
+    );
+  });
 }
 
 function parseManhoursBlock(sheet, parsed, defaultFy, headingRow, startCol, range, line) {
@@ -335,29 +377,43 @@ function applyParsedData(parsed) {
   const totals = createTotals();
 
   parsed.utilities.forEach((r, month) => {
-    if (isAllZeroOrNull(r, ['utility_cost', 'rm_cost'])) return;
+    if (isAllNull(r, ['utility_cost', 'rm_cost'])) return;
     if (upsertImportedUtility(month, nullIfMissing(r.utility_cost), nullIfMissing(r.rm_cost))) totals.utilities++;
   });
 
   parsed.production.forEach((r, month) => {
-    if (r.volume == null || r.volume === 0) return;
+    if (r.volume == null) return;
     if (upsertImportedProduction(month, r.volume)) totals.production++;
   });
 
   parsed.budget.forEach((r, month) => {
-    if (isAllZeroOrNull(r, ['utility_budget', 'rm_budget', 'volume_budget'])) return;
+    if (isAllNull(r, ['utility_budget', 'rm_budget', 'volume_budget'])) return;
     if (upsertImportedBudget(month, nullIfMissing(r.utility_budget), nullIfMissing(r.rm_budget), nullIfMissing(r.volume_budget))) totals.budget++;
   });
 
+  parsed.capacity.forEach(r => {
+    if (isAllNull(r, ['capacity', 'actual_output', 'machine_availability'])) return;
+    if (upsertImportedCapacity({
+      month: r.month,
+      line: r.line || '',
+      capacity: nullIfMissing(r.capacity),
+      actual_output: nullIfMissing(r.actual_output),
+      machine_availability: nullIfMissing(r.machine_availability)
+    })) {
+      totals.capacity++;
+    }
+  });
+
   parsed.capacity_weekly.forEach(r => {
-    if (isAllZeroOrNull(r, ['capacity', 'actual_output'])) return;
+    if (isAllNull(r, ['capacity', 'actual_output', 'machine_availability'])) return;
     if (upsertImportedWeeklyCapacity({
       month: r.month,
       line: r.line,
       week_label: r.week_label,
       week_num: r.week_num ?? null,
       capacity: nullIfMissing(r.capacity),
-      actual_output: nullIfMissing(r.actual_output)
+      actual_output: nullIfMissing(r.actual_output),
+      machine_availability: nullIfMissing(r.machine_availability)
     })) {
       totals.capacity_weekly++;
     }
@@ -415,6 +471,7 @@ function parsePeriodHeader(value) {
 
   return {
     source: match[1].toUpperCase(),
+    fiscalYear,
     month: isoMonth(calendarYear, monthNo)
   };
 }
@@ -425,7 +482,12 @@ function classifyPeriodMetric(label) {
   if (/UTILIT/i.test(text)) return 'utility';
   if (/^(R\s*&\s*M|R&M|REPAIR)/i.test(text)) return 'rm';
   if (/VOLUME/i.test(text)) return 'volume';
+  if (/MACHINE\s+AVAIL/i.test(text)) return 'machine_availability';
   return null;
+}
+
+function periodSeriesKey(period) {
+  return `${period.source}-${period.fiscalYear}`;
 }
 
 function findRowLabel(sheet, r, maxCol) {
@@ -462,31 +524,6 @@ function toNumber(value) {
 
 function cleanText(value) {
   return value == null ? '' : String(value).replace(/\s+/g, ' ').trim();
-}
-
-function normalizeLineName(text) {
-  const cleaned = cleanText(text).replace(/^Q\d+\s+/i, '');
-  const compact = cleaned
-    .replace(/\b(APRIL|MAY|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER|JANUARY|FEBRUARY|MARCH)\b.*$/i, '')
-    .replace(/\bRUNRATE\b.*$/i, '')
-    .replace(/\bMANHOURS\b.*$/i, '')
-    .trim();
-
-  const shortLine = compact.match(/\bL(\d+)\s+(.+)$/i);
-  if (shortLine) {
-    const product = shortLine[2].trim();
-    if (/ELASTOSEAL|ES\b/i.test(product)) return `Line ${shortLine[1]} ES`;
-    if (/EPOXY/i.test(product)) return `Line ${shortLine[1]} Epoxy`;
-    if (/\bBB\b/i.test(product)) return `Line ${shortLine[1]} BB`;
-    return `Line ${shortLine[1]} ${titleCase(product)}`;
-  }
-
-  const line = compact.match(/\bLINE\s+\d+\s+.+$/i);
-  return line ? titleCase(line[0]).replace(/\bEs\b/g, 'ES').replace(/\bBb\b/g, 'BB') : '';
-}
-
-function titleCase(value) {
-  return cleanText(value).toLowerCase().replace(/\b\w/g, m => m.toUpperCase());
 }
 
 function isMonthName(value) {
@@ -543,6 +580,10 @@ function isAllZeroOrNull(record, fields) {
   return fields.every(field => record[field] == null || Number(record[field]) === 0);
 }
 
+function isAllNull(record, fields) {
+  return fields.every(field => record[field] == null);
+}
+
 function mergeTotals(target, source) {
   Object.keys(target).forEach(key => { target[key] += source[key] || 0; });
 }
@@ -555,7 +596,8 @@ function renderImportSummary(fileSummaries, totals) {
   const cards = [
     ['Utilities', totals.utilities],
     ['Production', totals.production],
-    ['Budget', totals.budget],
+    ['OB / Target', totals.budget],
+    ['Runrate Monthly', totals.capacity],
     ['Runrate Weekly', totals.capacity_weekly],
     ['Manhours (Monthly)', totals.manhours],
     ['Loss', totals.loss]
@@ -592,7 +634,7 @@ function collectMonths(parsed) {
   ['utilities', 'production', 'budget'].forEach(key => {
     parsed[key].forEach((_, month) => months.add(month));
   });
-  ['capacity_weekly', 'manhours', 'loss'].forEach(key => {
+  ['capacity', 'capacity_weekly', 'manhours', 'loss'].forEach(key => {
     parsed[key].forEach(record => months.add(record.month));
   });
   return [...months].filter(Boolean).sort();

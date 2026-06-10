@@ -50,6 +50,7 @@ function initResponsiveNavigation() {
 
 // Attach Navigation to the global scope for the HTML 'onclick' attributes
 window.navigateTo = function(page) {
+  if (page === 'entry-production') page = 'entry-utilities';
   document.querySelectorAll('.nav-item').forEach(el => {
     el.classList.toggle('active', el.dataset.page === page);
   });

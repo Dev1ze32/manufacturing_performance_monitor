@@ -1,11 +1,14 @@
 import {
   clearManhoursRecords as clearManhoursRecordsQuery,
+  clearActualCostRecords as clearActualCostRecordsQuery,
   clearRunrateRecords as clearRunrateRecordsQuery,
   clearWeeklyCapacityRecords,
+  deleteActualCostRecord as deleteActualCostRecordQuery,
   deleteCapacityRecord,
   deleteLegacyManhoursWeeklyRows,
   deleteManhoursRecord,
   deleteWeeklyCapacityRecord,
+  getActualCostRows,
   getBudgetRows,
   getCapacityLineRows,
   getCapacityRows,
@@ -14,74 +17,92 @@ import {
   getLegacyManhoursWeeklyCount,
   getManhoursById,
   getManhoursRows,
-  getProductionRows,
-  getUtilityRows,
   getWeeklyCapacityById,
   saveBudgetRecord,
+  saveActualCostRecord,
   saveCapacityRecord,
   saveManhoursRecord,
-  saveProductionRecord,
-  saveUtilityRecord,
   saveWeeklyCapacityRecord
 } from './queries/formsQueries.js';
 import { 
   fmtN, fmtMonthLabel, monthOptions, showToast, 
   val, setVal, parseN, clearForm, calcEfficiency, calcRegHrsUtil, calcOTUtil,
-  calcPlannedRegHours, calcPlannedOTHours, calcPersonDays, getRunrateSummaryRows
+  calcPlannedRegHours, calcPlannedOTHours, calcPersonDays, getRunrateSummaryRows,
+  normalizeLineName
 } from './utils.js';
+
+function parsePercentInput(id) {
+  const value = parseN(id);
+  if (value == null) return null;
+  return Math.abs(value) > 1 ? value / 100 : value;
+}
+
+function percentInputValue(value) {
+  return value == null ? '' : Number(value) * 100;
+}
+
+function fmtPercentValue(value) {
+  return value == null ? '—' : (Number(value) * 100).toFixed(2) + '%';
+}
 
 // ── ENTRY: UTILITIES & R&M ─────────────────────────────────────────────────────
 function renderEntryUtilities(c) {
-  const rows = getUtilityRows();
+  const rows = getActualCostRows();
   c.innerHTML = `
     <div class="page-header">
-      <h1>Utilities & R&M Entry</h1>
-      <p>Enter monthly utility cost and repair & maintenance cost</p>
+      <h1>Actual Cost & Volume Entry</h1>
+      <p>Enter ACT utilities, R&M, and production volume for cost per kg</p>
     </div>
     <div class="card section-gap">
-      <div class="info-block"><strong>Note:</strong> Enter raw cost values. The system computes Cost per Kg automatically using the production volume for that month.</div>
+      <div class="info-block"><strong>ACT data:</strong> These values feed the actual Utilities/R&M cost per kg formulas. OB/target values are entered separately in OB / Target Entry.</div>
       <div class="form-section">
-        <div class="form-section-title">Add / Update Record</div>
+        <div class="form-section-title">Add / Update Actual Record</div>
         <div class="form-grid">
           <div class="form-group">
             <label>Month *</label>
             <select id="u_month"><option value="">Select month...</option>${monthOptions()}</select>
           </div>
           <div class="form-group">
-            <label>Utility Cost (₱ thousands)</label>
+            <label>Actual Utility Cost (₱ thousands)</label>
             <input type="number" id="u_util" placeholder="e.g. 1761.21" step="0.01">
             <span class="form-hint">Total electricity, water, fuel expenses</span>
           </div>
           <div class="form-group">
-            <label>R&M Cost (₱ thousands)</label>
+            <label>Actual R&M Cost (₱ thousands)</label>
             <input type="number" id="u_rm" placeholder="e.g. 1510.80" step="0.01">
             <span class="form-hint">Repair and maintenance expenses</span>
+          </div>
+          <div class="form-group">
+            <label>Actual Production Volume (MT)</label>
+            <input type="number" id="u_vol" placeholder="e.g. 1795.41" step="0.001">
+            <span class="form-hint">Denominator for Utilities/R&M cost per kg</span>
           </div>
         </div>
         <div style="margin-top:16px;display:flex;gap:10px">
           <button class="btn btn-primary" onclick="saveUtility()">Save Record</button>
-          <button class="btn btn-secondary" onclick="clearForm(['u_month','u_util','u_rm'])">Clear</button>
+          <button class="btn btn-secondary" onclick="clearForm(['u_month','u_util','u_rm','u_vol'])">Clear</button>
         </div>
       </div>
     </div>
     <div class="card">
       <div class="records-header">
-        <div class="card-title">Existing Records</div>
-        ${rows.length ? `<button class="btn btn-sm btn-danger" onclick="clearExistingRecords('utilities','Utilities & R&M records')">Clear Records</button>` : ''}
+        <div class="card-title">Existing Actual Records</div>
+        ${rows.length ? `<button class="btn btn-sm btn-danger" onclick="clearActualCostRecords()">Clear Records</button>` : ''}
       </div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Month</th><th>Utility Cost (₱)</th><th>R&M Cost (₱)</th><th>Actions</th></tr></thead>
+          <thead><tr><th>Month</th><th>Utility Cost (₱ thousands)</th><th>R&M Cost (₱ thousands)</th><th>Volume (MT)</th><th>Actions</th></tr></thead>
           <tbody>
             ${rows.length ? rows.map(r=>`<tr>
               <td><strong>${fmtMonthLabel(r.month)}</strong></td>
-              <td class="td-number">${fmtN(r.utility_cost,2)}</td>
-              <td class="td-number">${fmtN(r.rm_cost,2)}</td>
+              <td class="td-number">${r.utility_cost != null ? fmtN(r.utility_cost,2) : '—'}</td>
+              <td class="td-number">${r.rm_cost != null ? fmtN(r.rm_cost,2) : '—'}</td>
+              <td class="td-number">${r.volume != null ? fmtN(r.volume,3) : '—'}</td>
               <td><div class="record-actions">
-                <button class="btn btn-sm btn-secondary" onclick="editUtility('${r.month}',${r.utility_cost},${r.rm_cost})">Edit</button>
-                <button class="btn btn-sm btn-danger" onclick="deleteRecord('utilities','${r.month}')">Delete</button>
+                <button class="btn btn-sm btn-secondary" onclick="editUtility('${r.month}',${r.utility_cost ?? null},${r.rm_cost ?? null},${r.volume ?? null})">Edit</button>
+                <button class="btn btn-sm btn-danger" onclick="deleteActualCostRecord('${r.month}')">Delete</button>
               </div></td>
-            </tr>`).join('') : '<tr><td colspan="4"><div class="empty"><p>No records yet. Enter data above.</p></div></td></tr>'}
+            </tr>`).join('') : '<tr><td colspan="5"><div class="empty"><p>No records yet. Enter data above.</p></div></td></tr>'}
           </tbody>
         </table>
       </div>
@@ -90,79 +111,45 @@ function renderEntryUtilities(c) {
 }
  
 function saveUtility() {
-  const month=val('u_month'), util=parseFloat(val('u_util')), rm=parseFloat(val('u_rm'));
+  const month=val('u_month'), util=parseN('u_util'), rm=parseN('u_rm'), volume=parseN('u_vol');
   if(!month){showToast('Please select a month','error');return;}
-  if(isNaN(util)&&isNaN(rm)){showToast('Enter at least one cost value','error');return;}
-  saveUtilityRecord(month, isNaN(util)?null:util, isNaN(rm)?null:rm);
-  showToast('Utility record saved!');
+  if([util, rm, volume].every(v => v == null)){showToast('Enter at least one actual value','error');return;}
+  saveActualCostRecord(month, util, rm, volume);
+  showToast('Actual cost and volume record saved!');
   navigateTo('entry-utilities');
 }
-function editUtility(month,util,rm){
+function editUtility(month,util,rm,volume){
   document.getElementById('u_month').value=month;
   document.getElementById('u_util').value=util||'';
   document.getElementById('u_rm').value=rm||'';
+  document.getElementById('u_vol').value=volume||'';
   document.querySelector('#u_month').scrollIntoView({behavior:'smooth'});
+}
+
+function deleteActualCostRecord(month) {
+  if(!confirm(`Delete actual cost and volume record for ${fmtMonthLabel(month)}?`))return;
+  deleteActualCostRecordQuery(month);
+  showToast('Deleted.','error');navigateTo('entry-utilities');
+}
+
+function clearActualCostRecords() {
+  if(!confirm('Clear all actual Utilities, R&M, and Production Volume records?'))return;
+  clearActualCostRecordsQuery();
+  showToast('Actual cost and volume records cleared.','error');navigateTo('entry-utilities');
 }
  
 // ── ENTRY: PRODUCTION VOLUME ───────────────────────────────────────────────────
 function renderEntryProduction(c) {
-  const rows = getProductionRows();
-  c.innerHTML = `
-    <div class="page-header">
-      <h1>Production Volume Entry</h1>
-      <p>Enter monthly production volume in metric tons (MT)</p>
-    </div>
-    <div class="card section-gap">
-      <div class="info-block"><strong>Note:</strong> Production volume is the denominator for all cost-per-Kg calculations.</div>
-      <div class="form-section">
-        <div class="form-section-title">Add / Update Record</div>
-        <div class="form-grid">
-          <div class="form-group">
-            <label>Month *</label>
-            <select id="p_month"><option value="">Select month...</option>${monthOptions()}</select>
-          </div>
-          <div class="form-group">
-            <label>Production Volume (MT) *</label>
-            <input type="number" id="p_vol" placeholder="e.g. 1795.41" step="0.001">
-            <span class="form-hint">Total production in metric tons</span>
-          </div>
-        </div>
-        <div style="margin-top:16px;display:flex;gap:10px">
-          <button class="btn btn-primary" onclick="saveProduction()">Save Record</button>
-          <button class="btn btn-secondary" onclick="clearForm(['p_month','p_vol'])">Clear</button>
-        </div>
-      </div>
-    </div>
-    <div class="card">
-      <div class="records-header">
-        <div class="card-title">Existing Records</div>
-        ${rows.length ? `<button class="btn btn-sm btn-danger" onclick="clearExistingRecords('production','Production records')">Clear Records</button>` : ''}
-      </div>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Month</th><th>Volume (MT)</th><th>Actions</th></tr></thead>
-          <tbody>
-            ${rows.length ? rows.map(r=>`<tr>
-              <td><strong>${fmtMonthLabel(r.month)}</strong></td>
-              <td class="td-number">${fmtN(r.volume,3)}</td>
-              <td><div class="record-actions">
-                <button class="btn btn-sm btn-secondary" onclick="editProd('${r.month}',${r.volume})">Edit</button>
-                <button class="btn btn-sm btn-danger" onclick="deleteRecord('production','${r.month}')">Delete</button>
-              </div></td>
-            </tr>`).join('') : '<tr><td colspan="3"><div class="empty"><p>No records yet.</p></div></td></tr>'}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  `;
+  renderEntryUtilities(c);
 }
 function saveProduction(){
-  const month=val('p_month'), volume=parseFloat(val('p_vol'));
-  if(!month||isNaN(volume)){showToast('Month and volume are required','error');return;}
-  saveProductionRecord(month, volume);
-  showToast('Production record saved!');navigateTo('entry-production');
+  saveUtility();
 }
-function editProd(m,v){document.getElementById('p_month').value=m;document.getElementById('p_vol').value=v||'';}
+function editProd(m,v){
+  setVal('u_month',m);
+  setVal('u_vol',v);
+  document.querySelector('#u_month')?.scrollIntoView({behavior:'smooth'});
+}
  
 // ── ENTRY: CAPACITY ────────────────────────────────────────────────────────────
 function renderEntryCapacity(c) {
@@ -200,18 +187,22 @@ function renderEntryCapacity(c) {
               <span class="form-hint">Line name must be consistent (e.g. Line 4 ES, Line 6 Epoxy, Line 4 BB)</span>
             </div>
             <div class="form-group">
-              <label>Capacity (units) *</label>
+              <label>Capacity (units)</label>
               <input type="number" id="c_cap" placeholder="e.g. 138046" step="0.001" oninput="previewEff()">
             </div>
             <div class="form-group">
-              <label>Actual Output (units) *</label>
+              <label>Actual Output (units)</label>
               <input type="number" id="c_act" placeholder="e.g. 132313" step="0.001" oninput="previewEff()">
+            </div>
+            <div class="form-group">
+              <label>Machine Availability (%)</label>
+              <input type="number" id="c_avail" placeholder="e.g. 95" step="0.01">
             </div>
           </div>
           <div id="c_preview" style="margin-top:12px;font-size:13px;color:var(--gray-500)"></div>
           <div style="margin-top:16px;display:flex;gap:10px">
             <button class="btn btn-primary" onclick="saveCapacity()">Save Manual Monthly Total</button>
-            <button class="btn btn-secondary" onclick="clearForm(['c_month','c_line','c_cap','c_act'])">Clear</button>
+            <button class="btn btn-secondary" onclick="clearForm(['c_month','c_line','c_cap','c_act','c_avail'])">Clear</button>
           </div>
         </div>
       </div>
@@ -222,7 +213,7 @@ function renderEntryCapacity(c) {
         </div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Month</th><th>Line</th><th>Capacity</th><th>Actual Output</th><th>Efficiency</th><th>Actions</th></tr></thead>
+            <thead><tr><th>Month</th><th>Line</th><th>Capacity</th><th>Actual Output</th><th>Efficiency</th><th>Machine Avail.</th><th>Actions</th></tr></thead>
             <tbody>
               ${rows.length ? rows.map(r => {
                 const eff = calcEfficiency(r.capacity, r.actual_output);
@@ -231,12 +222,13 @@ function renderEntryCapacity(c) {
                   <td class="td-number">${fmtN(r.capacity, 0)}</td>
                   <td class="td-number">${fmtN(r.actual_output, 0)}</td>
                   <td class="td-number"><strong>${eff !== null ? (eff * 100).toFixed(2) + '%' : '—'}</strong></td>
+                  <td class="td-number">${fmtPercentValue(r.machine_availability)}</td>
                   <td><div class="record-actions">
-                    <button class="btn btn-sm btn-secondary" onclick="editCap('${r.month}','${r.line}',${r.capacity},${r.actual_output})">Edit</button>
+                    <button class="btn btn-sm btn-secondary" onclick="editCap('${r.month}','${r.line}',${r.capacity ?? null},${r.actual_output ?? null},${r.machine_availability ?? null})">Edit</button>
                     <button class="btn btn-sm btn-danger" onclick="deleteCapacity('${r.month}','${r.line}')">Delete</button>
                   </div></td>
                 </tr>`;
-              }).join('') : '<tr><td colspan="6"><div class="empty"><p>No records yet.</p></div></td></tr>'}
+              }).join('') : '<tr><td colspan="7"><div class="empty"><p>No records yet.</p></div></td></tr>'}
             </tbody>
           </table>
         </div>
@@ -269,12 +261,16 @@ function renderEntryCapacity(c) {
               <span class="form-hint">Weeks are auto-generated from the selected month</span>
             </div>
             <div class="form-group">
-              <label>Capacity (units) *</label>
+              <label>Capacity (units)</label>
               <input type="number" id="cw_cap" placeholder="e.g. 26467" step="0.001" oninput="previewWeekEff()">
             </div>
             <div class="form-group">
-              <label>Actual Output (units) *</label>
+              <label>Actual Output (units)</label>
               <input type="number" id="cw_act" placeholder="e.g. 24556" step="0.001" oninput="previewWeekEff()">
+            </div>
+            <div class="form-group">
+              <label>Machine Availability (%)</label>
+              <input type="number" id="cw_avail" placeholder="e.g. 95" step="0.01">
             </div>
           </div>
           <div id="cw_preview" style="margin-top:12px;font-size:13px;color:var(--gray-500)"></div>
@@ -288,7 +284,7 @@ function renderEntryCapacity(c) {
         <div class="card-title" style="margin-bottom:14px">Monthly Rollup</div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Month</th><th>Line</th><th>Capacity</th><th>Actual</th><th>Efficiency</th><th>Weekly Rows</th></tr></thead>
+            <thead><tr><th>Month</th><th>Line</th><th>Capacity</th><th>Actual</th><th>Efficiency</th><th>Machine Avail.</th><th>Weekly Rows</th></tr></thead>
             <tbody>
               ${rollupRows.length ? rollupRows.map(r => {
                 const eff = calcEfficiency(r.capacity, r.actual_output);
@@ -298,9 +294,10 @@ function renderEntryCapacity(c) {
                   <td class="td-number">${fmtN(r.capacity, 0)}</td>
                   <td class="td-number">${fmtN(r.actual_output, 0)}</td>
                   <td class="td-number"><strong>${eff !== null ? (eff * 100).toFixed(2) + '%' : '—'}</strong></td>
+                  <td class="td-number">${fmtPercentValue(r.machine_availability)}</td>
                   <td class="td-number">${r.weekly_count ? fmtN(r.weekly_count, 0) : 'manual total'}</td>
                 </tr>`;
-              }).join('') : '<tr><td colspan="6"><div class="empty"><p>No runrate data yet.</p></div></td></tr>'}
+              }).join('') : '<tr><td colspan="7"><div class="empty"><p>No runrate data yet.</p></div></td></tr>'}
             </tbody>
           </table>
         </div>
@@ -312,7 +309,7 @@ function renderEntryCapacity(c) {
         </div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Month</th><th>Line</th><th>Week</th><th>Capacity</th><th>Actual</th><th>Efficiency</th><th>Actions</th></tr></thead>
+            <thead><tr><th>Month</th><th>Line</th><th>Week</th><th>Capacity</th><th>Actual</th><th>Efficiency</th><th>Machine Avail.</th><th>Actions</th></tr></thead>
             <tbody>
               ${weekRows.length ? weekRows.map(r => {
                 const eff = calcEfficiency(r.capacity, r.actual_output);
@@ -323,12 +320,13 @@ function renderEntryCapacity(c) {
                   <td class="td-number">${fmtN(r.capacity, 0)}</td>
                   <td class="td-number">${fmtN(r.actual_output, 0)}</td>
                   <td class="td-number"><strong>${eff !== null ? (eff * 100).toFixed(2) + '%' : '—'}</strong></td>
+                  <td class="td-number">${fmtPercentValue(r.machine_availability)}</td>
                   <td><div class="record-actions">
                     <button class="btn btn-sm btn-secondary" onclick="editWeeklyCap(${r.id})">Edit</button>
                     <button class="btn btn-sm btn-danger" onclick="deleteWeeklyCapacity(${r.id})">Delete</button>
                   </div></td>
                 </tr>`;
-              }).join('') : '<tr><td colspan="7"><div class="empty"><p>No weekly records yet. Import from Excel or enter manually.</p></div></td></tr>'}
+              }).join('') : '<tr><td colspan="8"><div class="empty"><p>No weekly records yet. Import from Excel or enter manually.</p></div></td></tr>'}
             </tbody>
           </table>
         </div>
@@ -396,7 +394,7 @@ window.onCapWeekChange = function() {
 };
 
 window.clearWeeklyForm = function() {
-  clearForm(['cw_month', 'cw_line', 'cw_cap', 'cw_act']);
+  clearForm(['cw_month', 'cw_line', 'cw_cap', 'cw_act', 'cw_avail']);
   const sel = document.getElementById('cw_week');
   if (sel) sel.innerHTML = '<option value="">— select month first —</option>';
   const prev = document.getElementById('cw_preview');
@@ -428,32 +426,39 @@ function previewWeekEff() {
 }
 
 function saveCapacity() {
-  const month = val('c_month'), line = val('c_line').trim(), cap = parseFloat(val('c_cap')), act = parseFloat(val('c_act'));
-  if (!month || !line || isNaN(cap) || isNaN(act)) { showToast('All fields are required', 'error'); return; }
-  saveCapacityRecord(month, line, cap, act);
+  const month = val('c_month');
+  const line = normalizeLineName(val('c_line'));
+  const cap = parseN('c_cap');
+  const act = parseN('c_act');
+  const availability = parsePercentInput('c_avail');
+  if (!month || !line) { showToast('Month and line are required', 'error'); return; }
+  if (cap == null && act == null && availability == null) { showToast('Enter capacity, actual output, or machine availability.', 'error'); return; }
+  saveCapacityRecord(month, line, cap, act, availability);
   showToast('Manual monthly runrate saved!'); navigateTo('entry-capacity');
 }
 
 function saveWeeklyCapacity() {
   const month  = val('cw_month');
-  const line   = val('cw_line').trim();
+  const line   = normalizeLineName(val('cw_line'));
   const weekVal = val('cw_week'); // "15|APR WEEK 15"
-  const cap    = parseFloat(val('cw_cap'));
-  const act    = parseFloat(val('cw_act'));
+  const cap    = parseN('cw_cap');
+  const act    = parseN('cw_act');
+  const availability = parsePercentInput('cw_avail');
   if (!month || !line || !weekVal) { showToast('Month, line, and week are required', 'error'); return; }
-  if (isNaN(cap) || isNaN(act)) { showToast('Capacity and actual output are required', 'error'); return; }
+  if (cap == null && act == null && availability == null) { showToast('Enter capacity, actual output, or machine availability.', 'error'); return; }
   const [wnumStr, ...labelParts] = weekVal.split('|');
   const wlabel = labelParts.join('|');
   const wnum   = parseInt(wnumStr) || null;
-  saveWeeklyCapacityRecord(month, line, wlabel, wnum, cap, act);
+  saveWeeklyCapacityRecord(month, line, wlabel, wnum, cap, act, availability);
   showToast('Weekly runrate saved!'); navigateTo('entry-capacity');
 }
 
-function editCap(m, l, c, a) {
-  document.getElementById('c_month').value = m;
-  document.getElementById('c_line').value  = l;
-  document.getElementById('c_cap').value   = c;
-  document.getElementById('c_act').value   = a;
+function editCap(m, l, c, a, availability) {
+  setVal('c_month', m);
+  setVal('c_line', l);
+  setVal('c_cap', c);
+  setVal('c_act', a);
+  setVal('c_avail', percentInputValue(availability));
 }
 
 function editWeeklyCap(id) {
@@ -466,6 +471,7 @@ function editWeeklyCap(id) {
   setVal('cw_line', r.line);
   setVal('cw_cap', r.capacity);
   setVal('cw_act', r.actual_output);
+  setVal('cw_avail', percentInputValue(r.machine_availability));
   // Rebuild week options for this month, then select the matching week
   populateCapWeekOptions(r.month, r.week_num, r.week_label);
 }
@@ -609,7 +615,7 @@ function clearManhoursForm() {
   previewManhoursPlan();
 }
 function saveManhours(){
-  const month=val('mh_month'), line=val('mh_line').trim();
+  const month=val('mh_month'), line=normalizeLineName(val('mh_line'));
   const workdays = parseN('mh_workdays');
   const manpower = parseN('mh_manpower');
   const ar = parseN('mh_ar');
@@ -738,45 +744,45 @@ function renderEntryBudget(c) {
   const rows = getBudgetRows();
   c.innerHTML = `
     <div class="page-header">
-      <h1>Budget Entry</h1>
-      <p>Enter monthly budget targets for utilities, R&M, and volume</p>
+      <h1>OB / Target Entry</h1>
+      <p>Enter OB26 target values for utilities, R&M, and volume</p>
     </div>
     <div class="card section-gap">
-      <div class="info-block"><strong>Formula:</strong> Variance = Actual − Budget. Positive variance = over budget (unfavorable for cost).</div>
+      <div class="info-block"><strong>OB data:</strong> These target values are compared with ACT values in the OB vs Actual dashboard.</div>
       <div class="form-section">
-        <div class="form-section-title">Add / Update Budget Record</div>
+        <div class="form-section-title">Add / Update OB Target Record</div>
         <div class="form-grid">
           <div class="form-group">
             <label>Month *</label>
             <select id="b_month"><option value="">Select month...</option>${monthOptions()}</select>
           </div>
           <div class="form-group">
-            <label>Utility Budget (₱)</label>
+            <label>OB Utility Target (₱ thousands)</label>
             <input type="number" id="b_ubud" placeholder="e.g. 9001" step="0.01">
           </div>
           <div class="form-group">
-            <label>R&M Budget (₱)</label>
+            <label>OB R&M Target (₱ thousands)</label>
             <input type="number" id="b_rbud" placeholder="e.g. 4500" step="0.01">
           </div>
           <div class="form-group">
-            <label>Volume Budget (MT)</label>
+            <label>OB Volume Target (MT)</label>
             <input type="number" id="b_vbud" placeholder="e.g. 1800" step="0.001">
           </div>
         </div>
         <div style="margin-top:16px;display:flex;gap:10px">
-          <button class="btn btn-primary" onclick="saveBudget()">Save Budget</button>
+          <button class="btn btn-primary" onclick="saveBudget()">Save OB Target</button>
           <button class="btn btn-secondary" onclick="clearForm(['b_month','b_ubud','b_rbud','b_vbud'])">Clear</button>
         </div>
       </div>
     </div>
     <div class="card">
       <div class="records-header">
-        <div class="card-title">Existing Budget Records</div>
-        ${rows.length ? `<button class="btn btn-sm btn-danger" onclick="clearExistingRecords('budget','Budget records')">Clear Records</button>` : ''}
+        <div class="card-title">Existing OB Target Records</div>
+        ${rows.length ? `<button class="btn btn-sm btn-danger" onclick="clearExistingRecords('budget','OB target records')">Clear Records</button>` : ''}
       </div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Month</th><th>Utility Budget</th><th>R&M Budget</th><th>Volume Budget (MT)</th><th>Actions</th></tr></thead>
+          <thead><tr><th>Month</th><th>Utility OB (₱ thousands)</th><th>R&M OB (₱ thousands)</th><th>Volume OB (MT)</th><th>Actions</th></tr></thead>
           <tbody>
             ${rows.length ? rows.map(r=>`<tr>
               <td><strong>${fmtMonthLabel(r.month)}</strong></td>
@@ -787,7 +793,7 @@ function renderEntryBudget(c) {
                 <button class="btn btn-sm btn-secondary" onclick="editBudget('${r.month}',${r.utility_budget},${r.rm_budget},${r.volume_budget})">Edit</button>
                 <button class="btn btn-sm btn-danger" onclick="deleteRecord('budget','${r.month}')">Delete</button>
               </div></td>
-            </tr>`).join('') : '<tr><td colspan="5"><div class="empty"><p>No budget records yet.</p></div></td></tr>'}
+            </tr>`).join('') : '<tr><td colspan="5"><div class="empty"><p>No OB target records yet.</p></div></td></tr>'}
           </tbody>
         </table>
       </div>
@@ -798,14 +804,14 @@ function saveBudget(){
   const month=val('b_month'),ub=parseN('b_ubud'),rb=parseN('b_rbud'),vb=parseN('b_vbud');
   if(!month){showToast('Month is required','error');return;}
   saveBudgetRecord(month, ub, rb, vb);
-  showToast('Budget saved!');navigateTo('entry-budget');
+  showToast('OB target saved!');navigateTo('entry-budget');
 }
 function editBudget(m,ub,rb,vb){
   setVal('b_month',m);setVal('b_ubud',ub);setVal('b_rbud',rb);setVal('b_vbud',vb);
 }
 
 export {
-  renderEntryUtilities, saveUtility, editUtility,
+  renderEntryUtilities, saveUtility, editUtility, deleteActualCostRecord, clearActualCostRecords,
   renderEntryProduction, saveProduction, editProd,
   renderEntryCapacity, saveCapacity, editCap, deleteCapacity,
   saveWeeklyCapacity, editWeeklyCap, deleteWeeklyCapacity, clearWeeklyRecords, clearRunrateRecords,

@@ -14,5 +14,10 @@ export function deleteRecordByMonth(table, month) {
 
 export function clearEntryTable(table) {
   if (!isAllowedTable(table, clearableEntryTables)) return false;
+  if (table === 'manhours') {
+    const clearedMonthly = run('DELETE FROM manhours');
+    const clearedWeekly = run('DELETE FROM manhours_weekly');
+    return clearedMonthly && clearedWeekly;
+  }
   return run(`DELETE FROM ${table}`);
 }

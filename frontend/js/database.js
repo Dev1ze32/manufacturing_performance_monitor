@@ -57,6 +57,7 @@ function createTables() {
       line TEXT NOT NULL,
       capacity REAL,
       actual_output REAL,
+      machine_availability REAL,
       UNIQUE(month, line)
     )`,
     `CREATE TABLE IF NOT EXISTS manhours (
@@ -107,6 +108,7 @@ function createTables() {
       week_num INTEGER,
       capacity REAL,
       actual_output REAL,
+      machine_availability REAL,
       UNIQUE(month, line, week_label)
     )`
   ];
@@ -127,6 +129,12 @@ function migrateTables() {
   } catch(e) { /* column already exists */ }
   try {
     db.run("ALTER TABLE manhours ADD COLUMN manpower REAL");
+  } catch(e) { /* column already exists */ }
+  try {
+    db.run("ALTER TABLE capacity ADD COLUMN machine_availability REAL");
+  } catch(e) { /* column already exists */ }
+  try {
+    db.run("ALTER TABLE capacity_weekly ADD COLUMN machine_availability REAL");
   } catch(e) { /* column already exists */ }
 
   try {
