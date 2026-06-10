@@ -1,5 +1,13 @@
 import { initDB, run } from './database.js';
-import { getGlobalMonth, populateMonthFilter, showToast, clearForm, fmtMonthLabel } from './utils.js';
+import {
+  getGlobalMonth,
+  populateMonthFilter,
+  showToast,
+  clearForm,
+  fmtMonthLabel,
+  getRunrateSummaryRows,
+  getManhoursSummaryRows
+} from './utils.js';
 import * as Dashboards from './dashboard.js';
 import * as Forms from './forms.js';
 import * as Importer from './importer.js';
@@ -22,7 +30,7 @@ window.onGlobalMonthChange = function() {
 };
 
 function renderCurrentPage() {
-  const m = getGlobalMonth();
+  const m = currentPage === 'manhours' ? resolveRunrateManhoursMonth(getGlobalMonth()) : getGlobalMonth();
   const container = document.getElementById('page-' + currentPage);
   
   switch(currentPage) {
@@ -40,6 +48,23 @@ function renderCurrentPage() {
     case 'entry-loss': Forms.renderEntryLoss(container); break;
     case 'entry-budget': Forms.renderEntryBudget(container); break;
   }
+}
+
+function resolveRunrateManhoursMonth(selectedMonth) {
+  if (!selectedMonth) return '';
+
+  const runrateMonths = getRunrateSummaryRows('').map(r => r.month).filter(Boolean);
+  const manhoursMonths = getManhoursSummaryRows('').map(r => r.month).filter(Boolean);
+  const availableMonths = [...new Set([...runrateMonths, ...manhoursMonths])].sort();
+
+  if (!availableMonths.length || availableMonths.includes(selectedMonth)) return selectedMonth;
+
+  const fallbackMonth = availableMonths[availableMonths.length - 1];
+  const selector = document.getElementById('globalMonth');
+  if (selector && [...selector.options].some(option => option.value === fallbackMonth)) {
+    selector.value = fallbackMonth;
+  }
+  return fallbackMonth;
 }
 
 // Global Generic Delete (Used by the forms)
