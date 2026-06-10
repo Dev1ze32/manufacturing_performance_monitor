@@ -1,4 +1,11 @@
-import { run } from './database.js';
+import {
+  upsertImportedBudget,
+  upsertImportedLoss,
+  upsertImportedManhours,
+  upsertImportedProduction,
+  upsertImportedUtility,
+  upsertImportedWeeklyCapacity
+} from './queries/importerQueries.js';
 import { fmtMonthLabel, populateMonthFilter, showToast, calcPlannedRegHours, calcPlannedOTHours } from './utils.js';
 
 const MONTHS = {
@@ -329,68 +336,59 @@ function applyParsedData(parsed) {
 
   parsed.utilities.forEach((r, month) => {
     if (isAllZeroOrNull(r, ['utility_cost', 'rm_cost'])) return;
-    if (run(`INSERT INTO utilities (month, utility_cost, rm_cost) VALUES (?, ?, ?)
-      ON CONFLICT(month) DO UPDATE SET
-        utility_cost = COALESCE(excluded.utility_cost, utilities.utility_cost),
-        rm_cost = COALESCE(excluded.rm_cost, utilities.rm_cost)`,
-      [month, nullIfMissing(r.utility_cost), nullIfMissing(r.rm_cost)])) totals.utilities++;
+    if (upsertImportedUtility(month, nullIfMissing(r.utility_cost), nullIfMissing(r.rm_cost))) totals.utilities++;
   });
 
   parsed.production.forEach((r, month) => {
     if (r.volume == null || r.volume === 0) return;
-    if (run(`INSERT INTO production (month, volume) VALUES (?, ?)
-      ON CONFLICT(month) DO UPDATE SET volume = excluded.volume`,
-      [month, r.volume])) totals.production++;
+    if (upsertImportedProduction(month, r.volume)) totals.production++;
   });
 
   parsed.budget.forEach((r, month) => {
     if (isAllZeroOrNull(r, ['utility_budget', 'rm_budget', 'volume_budget'])) return;
-    if (run(`INSERT INTO budget (month, utility_budget, rm_budget, volume_budget) VALUES (?, ?, ?, ?)
-      ON CONFLICT(month) DO UPDATE SET
-        utility_budget = COALESCE(excluded.utility_budget, budget.utility_budget),
-        rm_budget = COALESCE(excluded.rm_budget, budget.rm_budget),
-        volume_budget = COALESCE(excluded.volume_budget, budget.volume_budget)`,
-      [month, nullIfMissing(r.utility_budget), nullIfMissing(r.rm_budget), nullIfMissing(r.volume_budget)])) totals.budget++;
+    if (upsertImportedBudget(month, nullIfMissing(r.utility_budget), nullIfMissing(r.rm_budget), nullIfMissing(r.volume_budget))) totals.budget++;
   });
 
   parsed.capacity_weekly.forEach(r => {
     if (isAllZeroOrNull(r, ['capacity', 'actual_output'])) return;
-    if (run(`INSERT INTO capacity_weekly (month, line, week_label, week_num, capacity, actual_output) VALUES (?, ?, ?, ?, ?, ?)
-      ON CONFLICT(month, line, week_label) DO UPDATE SET
-        week_num = excluded.week_num,
-        capacity = COALESCE(excluded.capacity, capacity_weekly.capacity),
-        actual_output = COALESCE(excluded.actual_output, capacity_weekly.actual_output)`,
-      [r.month, r.line, r.week_label, r.week_num ?? null, nullIfMissing(r.capacity), nullIfMissing(r.actual_output)])) {
-      run(`DELETE FROM capacity WHERE month = ? AND line = ?`, [r.month, r.line]);
+    if (upsertImportedWeeklyCapacity({
+      month: r.month,
+      line: r.line,
+      week_label: r.week_label,
+      week_num: r.week_num ?? null,
+      capacity: nullIfMissing(r.capacity),
+      actual_output: nullIfMissing(r.actual_output)
+    })) {
       totals.capacity_weekly++;
     }
   });
 
   parsed.manhours.forEach(r => {
     if (isAllZeroOrNull(r, ['planned_reg', 'actual_reg', 'planned_ot', 'actual_ot', 'absenteeism', 'working_days', 'manpower'])) return;
-    if (run(`INSERT INTO manhours (month, line, working_days, manpower, planned_reg, actual_reg, planned_ot, actual_ot, absenteeism) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(month, line) DO UPDATE SET
-        working_days = COALESCE(excluded.working_days, manhours.working_days),
-        manpower = COALESCE(excluded.manpower, manhours.manpower),
-        planned_reg = COALESCE(excluded.planned_reg, manhours.planned_reg),
-        actual_reg = COALESCE(excluded.actual_reg, manhours.actual_reg),
-        planned_ot = COALESCE(excluded.planned_ot, manhours.planned_ot),
-        actual_ot = COALESCE(excluded.actual_ot, manhours.actual_ot),
-        absenteeism = COALESCE(excluded.absenteeism, manhours.absenteeism)`,
-      [r.month, r.line || '', nullIfMissing(r.working_days), nullIfMissing(r.manpower), nullIfMissing(r.planned_reg), nullIfMissing(r.actual_reg), nullIfMissing(r.planned_ot), nullIfMissing(r.actual_ot), nullIfMissing(r.absenteeism)])) {
-      run(`DELETE FROM manhours_weekly WHERE month = ? AND line = ?`, [r.month, r.line || '']);
+    if (upsertImportedManhours({
+      month: r.month,
+      line: r.line || '',
+      working_days: nullIfMissing(r.working_days),
+      manpower: nullIfMissing(r.manpower),
+      planned_reg: nullIfMissing(r.planned_reg),
+      actual_reg: nullIfMissing(r.actual_reg),
+      planned_ot: nullIfMissing(r.planned_ot),
+      actual_ot: nullIfMissing(r.actual_ot),
+      absenteeism: nullIfMissing(r.absenteeism)
+    })) {
       totals.manhours++;
     }
   });
 
   parsed.loss.forEach(r => {
     if (isAllZeroOrNull(r, ['runrate_loss', 'absenteeism_loss', 'manhours_loss'])) return;
-    if (run(`INSERT INTO loss (month, line, runrate_loss, absenteeism_loss, manhours_loss) VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT(month, line) DO UPDATE SET
-        runrate_loss = COALESCE(excluded.runrate_loss, loss.runrate_loss),
-        absenteeism_loss = COALESCE(excluded.absenteeism_loss, loss.absenteeism_loss),
-        manhours_loss = COALESCE(excluded.manhours_loss, loss.manhours_loss)`,
-      [r.month, r.line || '', nullIfMissing(r.runrate_loss), nullIfMissing(r.absenteeism_loss), nullIfMissing(r.manhours_loss)])) totals.loss++;
+    if (upsertImportedLoss({
+      month: r.month,
+      line: r.line || '',
+      runrate_loss: nullIfMissing(r.runrate_loss),
+      absenteeism_loss: nullIfMissing(r.absenteeism_loss),
+      manhours_loss: nullIfMissing(r.manhours_loss)
+    })) totals.loss++;
   });
 
   return totals;

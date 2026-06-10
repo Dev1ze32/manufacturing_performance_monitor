@@ -1,4 +1,13 @@
-import { query } from './database.js';
+import {
+  getAllDistinctMonthRows,
+  getBudgetDistinctMonthRows,
+  getCostDistinctMonthRows,
+  getLatestProductionRecord,
+  getLatestUtilitiesRecord,
+  getManhoursSummaryRows as fetchManhoursSummaryRows,
+  getRunrateManhoursDistinctMonthRows,
+  getRunrateSummaryRows as fetchRunrateSummaryRows
+} from './queries/utilsQueries.js';
 
 export let charts = {};
 
@@ -42,16 +51,8 @@ export function monthOptions(selected='') {
 }
 
 export function getDistinctMonths() {
-  const sets = [
-    query('SELECT DISTINCT month FROM utilities'),
-    query('SELECT DISTINCT month FROM production'),
-    query('SELECT DISTINCT month FROM capacity_weekly'),
-    query('SELECT DISTINCT month FROM manhours'),
-    query('SELECT DISTINCT month FROM loss'),
-    query('SELECT DISTINCT month FROM budget')
-  ];
   const all = new Set();
-  sets.forEach(s => s.forEach(r => all.add(r.month)));
+  getAllDistinctMonthRows().forEach(r => all.add(r.month));
   return [...all].sort();
 }
 
@@ -60,26 +61,13 @@ export function getDistinctMonths() {
 export function getMonthsForPage(page) {
   switch (page) {
     case 'cost':
-      return unionMonths(
-        query('SELECT DISTINCT month FROM utilities'),
-        query('SELECT DISTINCT month FROM production')
-      );
+      return unionMonths(getCostDistinctMonthRows());
     case 'manhours':
-      return unionMonths(
-        query('SELECT DISTINCT month FROM capacity_weekly'),
-        query('SELECT DISTINCT month FROM manhours')
-      );
+      return unionMonths(getRunrateManhoursDistinctMonthRows());
     case 'loss':
-      return unionMonths(
-        query('SELECT DISTINCT month FROM capacity_weekly'),
-        query('SELECT DISTINCT month FROM manhours')
-      );
+      return unionMonths(getRunrateManhoursDistinctMonthRows());
     case 'budget':
-      return unionMonths(
-        query('SELECT DISTINCT month FROM budget'),
-        query('SELECT DISTINCT month FROM utilities'),
-        query('SELECT DISTINCT month FROM production')
-      );
+      return unionMonths(getBudgetDistinctMonthRows());
     case 'executive':
       // Executive uses everything — show all months that have any data
       return getDistinctMonths();
@@ -272,48 +260,16 @@ export function calcVariance(actual, budget) { return actual - budget; }
 export function calcVariancePct(actual, budget) { return (!budget || budget === 0) ? null : (actual - budget) / Math.abs(budget); }
 
 export function getManhoursSummaryRows(month = '') {
-  const where = month ? 'WHERE m.month = ?' : '';
-  const params = month ? [month] : [];
-
-  return query(`SELECT
-      m.month,
-      m.line,
-      m.working_days,
-      m.manpower,
-      CASE WHEN m.working_days IS NOT NULL AND m.manpower IS NOT NULL THEN m.working_days * m.manpower ELSE NULL END as person_days,
-      CASE WHEN m.working_days IS NOT NULL AND m.manpower IS NOT NULL THEN m.working_days * m.manpower * 8 ELSE m.planned_reg END as planned_reg,
-      m.actual_reg,
-      CASE WHEN m.working_days IS NOT NULL AND m.manpower IS NOT NULL THEN m.working_days * m.manpower * 4 ELSE m.planned_ot END as planned_ot,
-      m.actual_ot,
-      m.absenteeism,
-      0 as weekly_count
-    FROM manhours m
-    ${where}
-    ORDER BY m.month DESC, m.line`, params);
+  return fetchManhoursSummaryRows(month);
 }
 
 export function getRunrateSummaryRows(month = '') {
-  const weeklyWhere = month ? 'WHERE month = ?' : '';
-  const weeklyParams = month ? [month] : [];
-  return query(`SELECT
-      month,
-      line,
-      SUM(capacity) as capacity,
-      SUM(actual_output) as actual_output,
-      COUNT(*) as weekly_count
-    FROM capacity_weekly
-    ${weeklyWhere}
-    GROUP BY month, line
-    ORDER BY month DESC, line`, weeklyParams);
+  return fetchRunrateSummaryRows(month);
 }
 
 export function getMonthData(month) {
-  const u = month
-    ? query(`SELECT * FROM utilities WHERE month = ? ORDER BY month DESC LIMIT 1`, [month])[0] || {}
-    : query(`SELECT * FROM utilities ORDER BY month DESC LIMIT 1`)[0] || {};
-  const p = month
-    ? query(`SELECT * FROM production WHERE month = ? ORDER BY month DESC LIMIT 1`, [month])[0] || {}
-    : query(`SELECT * FROM production ORDER BY month DESC LIMIT 1`)[0] || {};
+  const u = getLatestUtilitiesRecord(month);
+  const p = getLatestProductionRecord(month);
   return { u, p };
 }
 

@@ -1,4 +1,16 @@
-import { query } from './database.js';
+import {
+  getBudgetActualRows,
+  getBudgetByMonth,
+  getCapacityLineQuarterRows,
+  getCapacityLineSummaries,
+  getCapacityMonthlyTotals,
+  getCapacityWeeklyLines,
+  getCapacityWeeklyPanelRows,
+  getCostDashboardRows,
+  getExecutiveCostTrendRows,
+  getProductionCapacityRows,
+  getWeeklyRunrateRows
+} from './queries/dashboardQueries.js';
 import { 
   fmt, fmtN, fmtPct, fmtMonthLabel, getKPIs, calcUtilCostPerKg, 
   calcRMCostPerKg, calcEnggCostPerKg, calcEfficiency, 
@@ -33,7 +45,7 @@ function renderExecutive(c, month) {
   const regUtil = calcRegHrsUtil(sumAReg, sumPReg);
   const otUtil = calcOTUtil(sumAOT, sumPOT);
  
-  const budRows = month ? query(`SELECT * FROM budget WHERE month = ?`, [month]) : [];
+  const budRows = getBudgetByMonth(month);
   const bud = budRows[0] || {};
  
   function kpiCard(label, value, unit='', badge='', hint='') {
@@ -47,9 +59,7 @@ function renderExecutive(c, month) {
   }
  
   // Trend data (last 12 months)
-  const trendU = query(`SELECT u.month, u.utility_cost, u.rm_cost, p.volume
-    FROM utilities u LEFT JOIN production p ON u.month = p.month
-    ORDER BY u.month ASC LIMIT 12`);
+  const trendU = getExecutiveCostTrendRows();
  
   const trendLabels = trendU.map(r => fmtMonthLabel(r.month));
   const trendUtil = trendU.map(r => r.volume > 0 ? (r.utility_cost/r.volume) : null);
@@ -158,9 +168,7 @@ function renderExecutive(c, month) {
  
 // ── COST DASHBOARD ─────────────────────────────────────────────────────────────
 function renderCost(c, month) {
-  const rows = query(`SELECT u.month, u.utility_cost, u.rm_cost, p.volume
-    FROM utilities u LEFT JOIN production p ON u.month = p.month
-    ORDER BY u.month DESC LIMIT 24`).reverse();
+  const rows = getCostDashboardRows();
  
   const mLabel = month ? fmtMonthLabel(month) : 'All Months';
   const sel = month ? rows.filter(r=>r.month===month) : rows;
@@ -236,8 +244,7 @@ function renderCost(c, month) {
  
 // ── PRODUCTION DASHBOARD ───────────────────────────────────────────────────────
 function renderProduction(c, month) {
-  const filter = month ? `WHERE month = '${month}'` : '';
-  const rows = query(`SELECT month, line, capacity, actual_output FROM capacity ${filter} ORDER BY month DESC, line`);
+  const rows = getProductionCapacityRows(month);
   const mLabel = month ? fmtMonthLabel(month) : 'All Months';
 
   // Aggregate by month for the trend chart
@@ -260,7 +267,7 @@ function renderProduction(c, month) {
     if (mo <= 6)  return { q: 3, fy: yr };
     return         { q: 4, fy: yr };
   }
-  const allMonthlyRows = query(`SELECT month, SUM(capacity) as cap, SUM(actual_output) as act FROM capacity GROUP BY month ORDER BY month`);
+  const allMonthlyRows = getCapacityMonthlyTotals();
   const byQuarter = {};
   allMonthlyRows.forEach(r => {
     const { q, fy } = fiscalQuarter(r.month);
@@ -277,17 +284,14 @@ function renderProduction(c, month) {
   });
 
   // Get all lines for the selected month (or all months) that have weekly data
-  const weeklyFilter = month ? `WHERE month = '${month}'` : '';
-  const weeklyLines = query(`SELECT DISTINCT line FROM capacity_weekly ${weeklyFilter} ORDER BY line`);
+  const weeklyLines = getCapacityWeeklyLines(month);
   const hasWeekly = weeklyLines.length > 0;
 
   // Build per-line summary cards for selected period
-  const lineRows = month
-    ? query(`SELECT line, SUM(capacity) as cap, SUM(actual_output) as act FROM capacity WHERE month=? GROUP BY line ORDER BY line`, [month])
-    : query(`SELECT line, SUM(capacity) as cap, SUM(actual_output) as act FROM capacity GROUP BY line ORDER BY line`);
+  const lineRows = getCapacityLineSummaries(month);
 
   // Per-line quarter breakdown (for the quarter summary table)
-  const lineQuarterRows = query(`SELECT month, line, SUM(capacity) as cap, SUM(actual_output) as act FROM capacity GROUP BY month, line ORDER BY month, line`);
+  const lineQuarterRows = getCapacityLineQuarterRows();
   const byLineQuarter = {};
   lineQuarterRows.forEach(r => {
     const { q, fy } = fiscalQuarter(r.month);
@@ -448,15 +452,7 @@ function renderProduction(c, month) {
 }
 
 function renderWeeklyPanel(line, month, visible) {
-  const monthFilter = month ? `AND month = '${month}'` : '';
-  const weeks = query(
-    `SELECT week_label, week_num, SUM(capacity) as cap, SUM(actual_output) as act, month
-     FROM capacity_weekly
-     WHERE line = ? ${monthFilter}
-     GROUP BY month, week_label, week_num
-     ORDER BY month ASC, week_num ASC, week_label ASC`,
-    [line]
-  );
+  const weeks = getCapacityWeeklyPanelRows(line, month);
 
   const panelId = 'weekly-panel-' + line.replace(/\s+/g, '-');
   const chartId = 'weekly-chart-' + line.replace(/\s+/g, '-');
@@ -501,15 +497,7 @@ function renderWeeklyPanel(line, month, visible) {
 }
 
 function drawWeeklyCharts(line, month) {
-  const monthFilter = month ? `AND month = '${month}'` : '';
-  const weeks = query(
-    `SELECT week_label, week_num, SUM(capacity) as cap, SUM(actual_output) as act, month
-     FROM capacity_weekly
-     WHERE line = ? ${monthFilter}
-     GROUP BY month, week_label, week_num
-     ORDER BY month ASC, week_num ASC, week_label ASC`,
-    [line]
-  );
+  const weeks = getCapacityWeeklyPanelRows(line, month);
   if (!weeks.length) return;
 
   const chartId = 'weekly-chart-' + line.replace(/\s+/g, '-');
@@ -598,9 +586,7 @@ function renderManhours(c, month) {
   if (requestedMonth && manhoursMonth && manhoursMonth !== requestedMonth) {
     fallbackNotes.push(`Manhours has no ${fmtMonthLabel(requestedMonth)} records, so it is showing ${manhoursLabel}.`);
   }
-  const weeklyRunrateRows = runrateMonth
-    ? query(`SELECT month, line, week_label, week_num, capacity, actual_output FROM capacity_weekly WHERE month = ? ORDER BY line, week_num ASC, week_label ASC`, [runrateMonth])
-    : query(`SELECT month, line, week_label, week_num, capacity, actual_output FROM capacity_weekly ORDER BY month DESC, line, week_num ASC, week_label ASC LIMIT 200`);
+  const weeklyRunrateRows = getWeeklyRunrateRows(runrateMonth);
 
   let totalCapacity = 0, totalOutput = 0;
   runrateRows.forEach(r => {
@@ -1343,12 +1329,7 @@ function renderLoss(c, month) {
  
 // ── BUDGET DASHBOARD ───────────────────────────────────────────────────────────
 function renderBudget(c, month) {
-  const filter = month ? `WHERE b.month = '${month}'` : '';
-  const rows = query(`SELECT b.month, b.utility_budget, b.rm_budget, b.volume_budget, u.utility_cost, u.rm_cost, p.volume
-    FROM budget b
-    LEFT JOIN utilities u ON b.month = u.month
-    LEFT JOIN production p ON b.month = p.month
-    ${filter} ORDER BY b.month DESC LIMIT 24`);
+  const rows = getBudgetActualRows(month);
   const mLabel = month ? fmtMonthLabel(month) : 'All Months';
  
   c.innerHTML = `

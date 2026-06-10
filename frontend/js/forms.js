@@ -1,4 +1,29 @@
-import { query, run } from './database.js';
+import {
+  clearManhoursRecords as clearManhoursRecordsQuery,
+  clearRunrateRecords as clearRunrateRecordsQuery,
+  clearWeeklyCapacityRecords,
+  deleteCapacityRecord,
+  deleteLegacyManhoursWeeklyRows,
+  deleteManhoursRecord,
+  deleteWeeklyCapacityRecord,
+  getBudgetRows,
+  getCapacityLineRows,
+  getCapacityRows,
+  getCapacityWeeklyLineRows,
+  getCapacityWeeklyRows,
+  getLegacyManhoursWeeklyCount,
+  getManhoursById,
+  getManhoursRows,
+  getProductionRows,
+  getUtilityRows,
+  getWeeklyCapacityById,
+  saveBudgetRecord,
+  saveCapacityRecord,
+  saveManhoursRecord,
+  saveProductionRecord,
+  saveUtilityRecord,
+  saveWeeklyCapacityRecord
+} from './queries/formsQueries.js';
 import { 
   fmtN, fmtMonthLabel, monthOptions, showToast, 
   val, setVal, parseN, clearForm, calcEfficiency, calcRegHrsUtil, calcOTUtil,
@@ -7,7 +32,7 @@ import {
 
 // ── ENTRY: UTILITIES & R&M ─────────────────────────────────────────────────────
 function renderEntryUtilities(c) {
-  const rows = query('SELECT * FROM utilities ORDER BY month DESC LIMIT 36');
+  const rows = getUtilityRows();
   c.innerHTML = `
     <div class="page-header">
       <h1>Utilities & R&M Entry</h1>
@@ -68,9 +93,7 @@ function saveUtility() {
   const month=val('u_month'), util=parseFloat(val('u_util')), rm=parseFloat(val('u_rm'));
   if(!month){showToast('Please select a month','error');return;}
   if(isNaN(util)&&isNaN(rm)){showToast('Enter at least one cost value','error');return;}
-  run(`INSERT INTO utilities (month,utility_cost,rm_cost) VALUES (?,?,?)
-    ON CONFLICT(month) DO UPDATE SET utility_cost=excluded.utility_cost, rm_cost=excluded.rm_cost`,
-    [month, isNaN(util)?null:util, isNaN(rm)?null:rm]);
+  saveUtilityRecord(month, isNaN(util)?null:util, isNaN(rm)?null:rm);
   showToast('Utility record saved!');
   navigateTo('entry-utilities');
 }
@@ -83,7 +106,7 @@ function editUtility(month,util,rm){
  
 // ── ENTRY: PRODUCTION VOLUME ───────────────────────────────────────────────────
 function renderEntryProduction(c) {
-  const rows = query('SELECT * FROM production ORDER BY month DESC LIMIT 36');
+  const rows = getProductionRows();
   c.innerHTML = `
     <div class="page-header">
       <h1>Production Volume Entry</h1>
@@ -136,15 +159,15 @@ function renderEntryProduction(c) {
 function saveProduction(){
   const month=val('p_month'), volume=parseFloat(val('p_vol'));
   if(!month||isNaN(volume)){showToast('Month and volume are required','error');return;}
-  run(`INSERT INTO production (month,volume) VALUES (?,?) ON CONFLICT(month) DO UPDATE SET volume=excluded.volume`,[month,volume]);
+  saveProductionRecord(month, volume);
   showToast('Production record saved!');navigateTo('entry-production');
 }
 function editProd(m,v){document.getElementById('p_month').value=m;document.getElementById('p_vol').value=v||'';}
  
 // ── ENTRY: CAPACITY ────────────────────────────────────────────────────────────
 function renderEntryCapacity(c) {
-  const rows = query('SELECT * FROM capacity ORDER BY month DESC, line LIMIT 60');
-  const weekRows = query('SELECT * FROM capacity_weekly ORDER BY month DESC, line, week_num ASC, week_label ASC LIMIT 200');
+  const rows = getCapacityRows();
+  const weekRows = getCapacityWeeklyRows();
   const rollupRows = getRunrateSummaryRows();
 
   // Collect existing lines for the dropdown helper
@@ -407,9 +430,7 @@ function previewWeekEff() {
 function saveCapacity() {
   const month = val('c_month'), line = val('c_line').trim(), cap = parseFloat(val('c_cap')), act = parseFloat(val('c_act'));
   if (!month || !line || isNaN(cap) || isNaN(act)) { showToast('All fields are required', 'error'); return; }
-  run(`INSERT INTO capacity (month,line,capacity,actual_output) VALUES (?,?,?,?)
-    ON CONFLICT(month,line) DO UPDATE SET capacity=excluded.capacity, actual_output=excluded.actual_output`,
-    [month, line, cap, act]);
+  saveCapacityRecord(month, line, cap, act);
   showToast('Manual monthly runrate saved!'); navigateTo('entry-capacity');
 }
 
@@ -424,9 +445,7 @@ function saveWeeklyCapacity() {
   const [wnumStr, ...labelParts] = weekVal.split('|');
   const wlabel = labelParts.join('|');
   const wnum   = parseInt(wnumStr) || null;
-  run(`INSERT INTO capacity_weekly (month,line,week_label,week_num,capacity,actual_output) VALUES (?,?,?,?,?,?)
-    ON CONFLICT(month,line,week_label) DO UPDATE SET week_num=excluded.week_num, capacity=excluded.capacity, actual_output=excluded.actual_output`,
-    [month, line, wlabel, wnum, cap, act]);
+  saveWeeklyCapacityRecord(month, line, wlabel, wnum, cap, act);
   showToast('Weekly runrate saved!'); navigateTo('entry-capacity');
 }
 
@@ -438,7 +457,7 @@ function editCap(m, l, c, a) {
 }
 
 function editWeeklyCap(id) {
-  const r = query(`SELECT * FROM capacity_weekly WHERE id=?`, [id])[0];
+  const r = getWeeklyCapacityById(id);
   if (!r) return;
   // Switch to weekly tab
   document.getElementById('cap-panel-monthly').style.display = 'none';
@@ -453,37 +472,36 @@ function editWeeklyCap(id) {
 
 function deleteCapacity(month, line) {
   if (!confirm(`Delete manual monthly runrate record for ${line} in ${fmtMonthLabel(month)}?`)) return;
-  run(`DELETE FROM capacity WHERE month=? AND line=?`, [month, line]);
+  deleteCapacityRecord(month, line);
   showToast('Deleted.', 'error'); navigateTo('entry-capacity');
 }
 
 function deleteWeeklyCapacity(id) {
   if (!confirm('Delete this weekly runrate record?')) return;
-  run(`DELETE FROM capacity_weekly WHERE id=?`, [id]);
+  deleteWeeklyCapacityRecord(id);
   showToast('Deleted.', 'error'); navigateTo('entry-capacity');
 }
 
 function clearWeeklyRecords() {
   if (!confirm('Clear ALL weekly runrate records?')) return;
-  run(`DELETE FROM capacity_weekly`);
+  clearWeeklyCapacityRecords();
   showToast('Weekly records cleared.', 'error'); navigateTo('entry-capacity');
 }
 
 function clearRunrateRecords() {
   if (!confirm('Clear all runrate efficiency data? This removes weekly rows and manual monthly totals.')) return;
-  run(`DELETE FROM capacity_weekly`);
-  run(`DELETE FROM capacity`);
+  clearRunrateRecordsQuery();
   showToast('Runrate efficiency data cleared.', 'error'); navigateTo('entry-capacity');
 }
  
 // ── ENTRY: MANHOURS ────────────────────────────────────────────────────────────
 function renderEntryManhours(c) {
-  const rows = query('SELECT * FROM manhours ORDER BY month DESC, line LIMIT 200');
-  const legacyWeeklyCount = query('SELECT COUNT(*) as count FROM manhours_weekly')[0]?.count || 0;
+  const rows = getManhoursRows();
+  const legacyWeeklyCount = getLegacyManhoursWeeklyCount();
   const existingLines = [...new Set([
     ...rows.map(r => r.line),
-    ...query('SELECT DISTINCT line FROM capacity').map(r => r.line),
-    ...query('SELECT DISTINCT line FROM capacity_weekly').map(r => r.line)
+    ...getCapacityLineRows().map(r => r.line),
+    ...getCapacityWeeklyLineRows().map(r => r.line)
   ].filter(Boolean))].sort();
   c.innerHTML = `
     <div class="page-header">
@@ -617,22 +635,22 @@ function saveManhours(){
   }
   
   const lineKey = line || '';
-  run(`INSERT INTO manhours (month,line,working_days,manpower,planned_reg,actual_reg,planned_ot,actual_ot,absenteeism)
-       VALUES (?,?,?,?,?,?,?,?,?)
-       ON CONFLICT(month,line) DO UPDATE SET
-        working_days=excluded.working_days,
-        manpower=excluded.manpower,
-        planned_reg=excluded.planned_reg,
-        actual_reg=excluded.actual_reg,
-        planned_ot=excluded.planned_ot,
-        actual_ot=excluded.actual_ot,
-        absenteeism=excluded.absenteeism`,
-    [month, lineKey, workdays, manpower, pr, ar, pot, aot, abs]);
-  run(`DELETE FROM manhours_weekly WHERE month=? AND line=?`, [month, lineKey]);
+  saveManhoursRecord({
+    month,
+    line: lineKey,
+    workingDays: workdays,
+    manpower,
+    plannedReg: pr,
+    actualReg: ar,
+    plannedOT: pot,
+    actualOT: aot,
+    absenteeism: abs
+  });
+  deleteLegacyManhoursWeeklyRows(month, lineKey);
   showToast('Monthly manhours record saved!'); navigateTo('entry-manhours');
 }
 function editMH(id){
-  const r=query(`SELECT * FROM manhours WHERE id=?`,[id])[0];
+  const r=getManhoursById(id);
   if(!r)return;
   setVal('mh_month',r.month);
   setVal('mh_line',r.line||'');
@@ -645,13 +663,12 @@ function editMH(id){
 }
 function deleteMH(id){
   if(!confirm('Delete this monthly manhours record?'))return;
-  run(`DELETE FROM manhours WHERE id=?`,[id]);
+  deleteManhoursRecord(id);
   showToast('Deleted.','error');navigateTo('entry-manhours');
 }
 function clearManhoursRecords() {
   if (!confirm('Clear all monthly manhours records and old weekly manhours rows?')) return;
-  run(`DELETE FROM manhours`);
-  run(`DELETE FROM manhours_weekly`);
+  clearManhoursRecordsQuery();
   showToast('Manhours records cleared.','error');navigateTo('entry-manhours');
 }
  
@@ -669,6 +686,7 @@ function renderEntryLoss(c) {
       </div>
       <div class="form-section">
         <div class="form-section-title">How each loss is calculated</div>
+        <div class="table-wrap">
         <table style="width:100%;font-size:13px;border-collapse:collapse">
           <thead>
             <tr>
@@ -695,6 +713,7 @@ function renderEntryLoss(c) {
             </tr>
           </tbody>
         </table>
+        </div>
       </div>
       <div style="margin-top:8px;padding-top:20px;border-top:1px solid var(--gray-200)">
         <p style="font-size:13px;color:var(--gray-500);margin-bottom:12px">
@@ -716,7 +735,7 @@ function deleteLoss(){}
  
 // ── ENTRY: BUDGET ──────────────────────────────────────────────────────────────
 function renderEntryBudget(c) {
-  const rows = query('SELECT * FROM budget ORDER BY month DESC LIMIT 36');
+  const rows = getBudgetRows();
   c.innerHTML = `
     <div class="page-header">
       <h1>Budget Entry</h1>
@@ -778,9 +797,7 @@ function renderEntryBudget(c) {
 function saveBudget(){
   const month=val('b_month'),ub=parseN('b_ubud'),rb=parseN('b_rbud'),vb=parseN('b_vbud');
   if(!month){showToast('Month is required','error');return;}
-  run(`INSERT INTO budget (month,utility_budget,rm_budget,volume_budget) VALUES (?,?,?,?)
-    ON CONFLICT(month) DO UPDATE SET utility_budget=excluded.utility_budget,rm_budget=excluded.rm_budget,volume_budget=excluded.volume_budget`,
-    [month,ub,rb,vb]);
+  saveBudgetRecord(month, ub, rb, vb);
   showToast('Budget saved!');navigateTo('entry-budget');
 }
 function editBudget(m,ub,rb,vb){

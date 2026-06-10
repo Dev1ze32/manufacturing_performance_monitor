@@ -1,4 +1,5 @@
-import { initDB, run } from './database.js';
+import { initDB } from './database.js';
+import { clearEntryTable, deleteRecordByMonth } from './queries/appQueries.js';
 import {
   getGlobalMonth,
   setGlobalMonth,
@@ -17,6 +18,36 @@ import * as Importer from './importer.js';
 
 let currentPage = 'executive';
 
+function setSidebarOpen(isOpen) {
+  const sidebar = document.getElementById('sidebar');
+  const toggle = document.getElementById('sidebarToggle');
+  if (!sidebar || !toggle) return;
+
+  sidebar.classList.toggle('open', isOpen);
+  document.body.classList.toggle('sidebar-open', isOpen);
+  toggle.setAttribute('aria-expanded', String(isOpen));
+  toggle.setAttribute('aria-label', isOpen ? 'Close navigation' : 'Open navigation');
+}
+
+function initResponsiveNavigation() {
+  const toggle = document.getElementById('sidebarToggle');
+  const backdrop = document.getElementById('sidebarBackdrop');
+
+  toggle?.addEventListener('click', () => {
+    setSidebarOpen(!document.body.classList.contains('sidebar-open'));
+  });
+
+  backdrop?.addEventListener('click', () => setSidebarOpen(false));
+
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape') setSidebarOpen(false);
+  });
+
+  window.addEventListener('resize', () => {
+    if (window.innerWidth > 1024) setSidebarOpen(false);
+  });
+}
+
 // Attach Navigation to the global scope for the HTML 'onclick' attributes
 window.navigateTo = function(page) {
   document.querySelectorAll('.nav-item').forEach(el => {
@@ -26,6 +57,7 @@ window.navigateTo = function(page) {
   document.getElementById('page-' + page).style.display = '';
   currentPage = page;
   populateMonthFilter(page);  // refresh picker to show only months relevant to this page
+  if (window.innerWidth <= 1024) setSidebarOpen(false);
   renderCurrentPage();
 };
 
@@ -74,7 +106,7 @@ function resolveRunrateManhoursMonth(selectedMonth) {
 // Global Generic Delete (Used by the forms)
 window.deleteRecord = function(table, month) {
   if(!confirm(`Delete record for ${fmtMonthLabel(month)}?`)) return;
-  run(`DELETE FROM ${table} WHERE month=?`, [month]);
+  deleteRecordByMonth(table, month);
   showToast('Deleted.', 'error');
   renderCurrentPage();
 };
@@ -89,7 +121,7 @@ window.clearExistingRecords = function(table, label) {
 
   if(!confirm(`Clear all ${label}? This will delete every existing record in this section.`)) return;
 
-  const cleared = run(`DELETE FROM ${table}`);
+  const cleared = clearEntryTable(table);
   if(!cleared) {
     showToast(`Could not clear ${label}.`, 'error');
     return;
@@ -113,6 +145,7 @@ Object.entries(Importer).forEach(([name, func]) => {
 
 // Boot Application
 window.addEventListener('DOMContentLoaded', () => {
+  initResponsiveNavigation();
   initDB().then(() => {
     populateMonthFilter(currentPage);
     renderCurrentPage();
