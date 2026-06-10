@@ -1,14 +1,24 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from pathlib import Path
+import sys
+from typing import Dict
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .config import get_settings
-from .database import create_database
-from .routes.api import router as api_router
-from .schema import migrate
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from backend.config import get_settings
+    from backend.database import create_database
+    from backend.routes.api import router as api_router
+    from backend.schema import migrate
+else:
+    from .config import get_settings
+    from .database import create_database
+    from .routes.api import router as api_router
+    from .schema import migrate
 
 
 settings = get_settings()
@@ -37,7 +47,7 @@ app.include_router(api_router)
 
 
 @app.get("/")
-async def root() -> dict[str, str]:
+async def root() -> Dict[str, str]:
     return {
         "name": settings.app_name,
         "status": "ok",
@@ -48,4 +58,4 @@ async def root() -> dict[str, str]:
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("backend.server:app", host="127.0.0.1", port=8000, reload=True)
+    uvicorn.run(app, host="127.0.0.1", port=8000)

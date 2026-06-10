@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
@@ -32,30 +32,30 @@ def validate_month(month: str) -> str:
     return month
 
 
-def require_any(payload: dict[str, Any], fields: list[str], message: str) -> None:
+def require_any(payload: Dict[str, Any], fields: List[str], message: str) -> None:
     if all(payload.get(field) is None for field in fields):
         raise HTTPException(status_code=422, detail=message)
 
 
-def model_data(payload: Any) -> dict[str, Any]:
+def model_data(payload: Any) -> Dict[str, Any]:
     if hasattr(payload, "model_dump"):
         return payload.model_dump()
     return payload.dict()
 
 
 @router.get("/health")
-async def health(request: Request) -> dict[str, Any]:
+async def health(request: Request) -> Dict[str, Any]:
     db = get_db(request)
     return {"ok": True, "database": db.dialect}
 
 
 @router.get("/months")
-async def months(request: Request) -> list[str]:
+async def months(request: Request) -> List[str]:
     return await dashboards.list_months(get_db(request))
 
 
 @router.get("/actual-costs")
-async def list_actual_costs(request: Request, limit: int = Query(default=100, ge=1, le=500)) -> list[dict[str, Any]]:
+async def list_actual_costs(request: Request, limit: int = Query(default=100, ge=1, le=500)) -> List[Dict[str, Any]]:
     return await actual_costs.list_actual_costs(get_db(request), limit=limit)
 
 
@@ -88,7 +88,7 @@ async def clear_actual_costs(request: Request) -> DeletedResponse:
 
 
 @router.get("/ob-targets")
-async def list_ob_targets(request: Request, limit: int = Query(default=100, ge=1, le=500)) -> list[dict[str, Any]]:
+async def list_ob_targets(request: Request, limit: int = Query(default=100, ge=1, le=500)) -> List[Dict[str, Any]]:
     return await ob_targets.list_ob_targets(get_db(request), limit=limit)
 
 
@@ -121,7 +121,7 @@ async def clear_ob_targets(request: Request) -> DeletedResponse:
 
 
 @router.get("/runrate/monthly")
-async def list_monthly_runrate(request: Request, limit: int = Query(default=200, ge=1, le=1000)) -> list[dict[str, Any]]:
+async def list_monthly_runrate(request: Request, limit: int = Query(default=200, ge=1, le=1000)) -> List[Dict[str, Any]]:
     return await runrate.list_monthly_runrate(get_db(request), limit=limit)
 
 
@@ -155,9 +155,9 @@ async def delete_monthly_runrate(request: Request, month: str, line: str) -> Del
 @router.get("/runrate/weekly")
 async def list_weekly_runrate(
     request: Request,
-    month: str | None = None,
+    month: Optional[str] = None,
     limit: int = Query(default=300, ge=1, le=2000),
-) -> list[dict[str, Any]]:
+) -> List[Dict[str, Any]]:
     if month:
         validate_month(month)
     return await runrate.list_weekly_runrate(get_db(request), month=month, limit=limit)
@@ -198,7 +198,7 @@ async def clear_runrate(request: Request) -> DeletedResponse:
 
 
 @router.get("/manhours")
-async def list_manhours(request: Request, limit: int = Query(default=300, ge=1, le=1000)) -> list[dict[str, Any]]:
+async def list_manhours(request: Request, limit: int = Query(default=300, ge=1, le=1000)) -> List[Dict[str, Any]]:
     return await manhours.list_manhours(get_db(request), limit=limit)
 
 
@@ -239,33 +239,33 @@ async def clear_manhours(request: Request) -> DeletedResponse:
 
 
 @router.get("/dashboard/cost")
-async def dashboard_cost(request: Request, limit: int = Query(default=100, ge=1, le=500)) -> list[dict[str, Any]]:
+async def dashboard_cost(request: Request, limit: int = Query(default=100, ge=1, le=500)) -> List[Dict[str, Any]]:
     return await dashboards.get_cost_rows(get_db(request), limit=limit)
 
 
 @router.get("/dashboard/production")
-async def dashboard_production(request: Request, month: str | None = None) -> list[dict[str, Any]]:
+async def dashboard_production(request: Request, month: Optional[str] = None) -> List[Dict[str, Any]]:
     if month:
         validate_month(month)
     return await dashboards.get_production_rows(get_db(request), month=month)
 
 
 @router.get("/dashboard/runrate-summary")
-async def dashboard_runrate_summary(request: Request, month: str | None = None) -> list[dict[str, Any]]:
+async def dashboard_runrate_summary(request: Request, month: Optional[str] = None) -> List[Dict[str, Any]]:
     if month:
         validate_month(month)
     return await dashboards.get_runrate_summary(get_db(request), month=month)
 
 
 @router.get("/dashboard/manhours-summary")
-async def dashboard_manhours_summary(request: Request, month: str | None = None) -> list[dict[str, Any]]:
+async def dashboard_manhours_summary(request: Request, month: Optional[str] = None) -> List[Dict[str, Any]]:
     if month:
         validate_month(month)
     return await dashboards.get_manhours_summary(get_db(request), month=month)
 
 
 @router.get("/dashboard/ob-actual")
-async def dashboard_ob_actual(request: Request, month: str | None = None) -> list[dict[str, Any]]:
+async def dashboard_ob_actual(request: Request, month: Optional[str] = None) -> List[Dict[str, Any]]:
     if month:
         validate_month(month)
     return await dashboards.get_ob_actual_rows(get_db(request), month=month)

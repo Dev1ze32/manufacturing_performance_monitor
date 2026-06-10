@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import re
+from typing import Optional, Union
 
 
-def normalize_line_name(value: str | None) -> str:
+def normalize_line_name(value: Optional[str]) -> str:
     cleaned = re.sub(r"\s+", " ", value or "").strip()
     if not cleaned:
         return ""
@@ -32,7 +33,7 @@ def normalize_line_name(value: str | None) -> str:
     return _title_case(compact).replace(" Es", " ES").replace(" Bb", " BB")
 
 
-def normalize_percent(value: float | int | None) -> float | None:
+def normalize_percent(value: Optional[Union[float, int]]) -> Optional[float]:
     if value is None:
         return None
     number = float(value)

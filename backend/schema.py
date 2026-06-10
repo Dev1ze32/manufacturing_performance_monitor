@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from typing import List, Tuple
+
 from .database import Database
 
 
-MIGRATIONS: list[tuple[int, list[str]]] = [
+MIGRATIONS: List[Tuple[int, List[str]]] = [
     (
         1,
         [

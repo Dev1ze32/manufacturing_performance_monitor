@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Dict, List, Optional
 
 from ..database import Database
 from .runrate import EFFECTIVE_CAPACITY_CTE
 
 
-async def list_months(db: Database) -> list[str]:
+async def list_months(db: Database) -> List[str]:
     rows = await db.fetch_all(
         """
         SELECT DISTINCT month FROM utilities
@@ -28,7 +28,7 @@ async def list_months(db: Database) -> list[str]:
     return [row["month"] for row in rows if row.get("month")]
 
 
-async def get_cost_rows(db: Database, limit: int = 100) -> list[dict[str, Any]]:
+async def get_cost_rows(db: Database, limit: int = 100) -> List[Dict[str, Any]]:
     return await db.fetch_all(
         """
         SELECT u.month, u.utility_cost, u.rm_cost, p.volume
@@ -41,9 +41,9 @@ async def get_cost_rows(db: Database, limit: int = 100) -> list[dict[str, Any]]:
     )
 
 
-async def get_production_rows(db: Database, month: str | None = None) -> list[dict[str, Any]]:
+async def get_production_rows(db: Database, month: Optional[str] = None) -> List[Dict[str, Any]]:
     where = "WHERE month = :month" if month else ""
-    params: dict[str, Any] = {"month": month} if month else {}
+    params: Dict[str, Any] = {"month": month} if month else {}
     return await db.fetch_all(
         f"""
         {EFFECTIVE_CAPACITY_CTE}
@@ -56,9 +56,9 @@ async def get_production_rows(db: Database, month: str | None = None) -> list[di
     )
 
 
-async def get_runrate_summary(db: Database, month: str | None = None) -> list[dict[str, Any]]:
+async def get_runrate_summary(db: Database, month: Optional[str] = None) -> List[Dict[str, Any]]:
     where = "WHERE month = :month" if month else ""
-    params: dict[str, Any] = {"month": month} if month else {}
+    params: Dict[str, Any] = {"month": month} if month else {}
     return await db.fetch_all(
         f"""
         {EFFECTIVE_CAPACITY_CTE}
@@ -78,9 +78,9 @@ async def get_runrate_summary(db: Database, month: str | None = None) -> list[di
     )
 
 
-async def get_manhours_summary(db: Database, month: str | None = None) -> list[dict[str, Any]]:
+async def get_manhours_summary(db: Database, month: Optional[str] = None) -> List[Dict[str, Any]]:
     where = "WHERE month = :month" if month else ""
-    params: dict[str, Any] = {"month": month} if month else {}
+    params: Dict[str, Any] = {"month": month} if month else {}
     return await db.fetch_all(
         f"""
         SELECT
@@ -114,9 +114,9 @@ async def get_manhours_summary(db: Database, month: str | None = None) -> list[d
     )
 
 
-async def get_ob_actual_rows(db: Database, month: str | None = None) -> list[dict[str, Any]]:
+async def get_ob_actual_rows(db: Database, month: Optional[str] = None) -> List[Dict[str, Any]]:
     where = "WHERE b.month = :month" if month else ""
-    params: dict[str, Any] = {"month": month} if month else {}
+    params: Dict[str, Any] = {"month": month} if month else {}
     return await db.fetch_all(
         f"""
         SELECT

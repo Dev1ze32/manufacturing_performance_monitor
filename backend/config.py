@@ -1,13 +1,14 @@
 from dataclasses import dataclass
 import os
 from pathlib import Path
+from typing import List
 
 
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_DATA_DIR = BASE_DIR / "data"
 
 
-def _csv_env(name: str, default: str = "") -> list[str]:
+def _csv_env(name: str, default: str = "") -> List[str]:
     value = os.getenv(name, default)
     return [item.strip() for item in value.split(",") if item.strip()]
 
@@ -18,7 +19,7 @@ class Settings:
     environment: str
     database_backend: str
     sqlite_path: Path
-    cors_origins: list[str]
+    cors_origins: List[str]
 
 
 def get_settings() -> Settings:

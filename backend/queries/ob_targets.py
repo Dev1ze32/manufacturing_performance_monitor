@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Dict, List, Optional
 
 from ..database import Database
 
 
-async def list_ob_targets(db: Database, limit: int = 100) -> list[dict[str, Any]]:
+async def list_ob_targets(db: Database, limit: int = 100) -> List[Dict[str, Any]]:
     return await db.fetch_all(
         """
         SELECT month, utility_budget, rm_budget, volume_budget
@@ -20,9 +20,9 @@ async def list_ob_targets(db: Database, limit: int = 100) -> list[dict[str, Any]
 async def save_ob_target(
     db: Database,
     month: str,
-    utility_budget: float | None,
-    rm_budget: float | None,
-    volume_budget: float | None,
+    utility_budget: Optional[float],
+    rm_budget: Optional[float],
+    volume_budget: Optional[float],
 ) -> None:
     await db.execute(
         """
@@ -51,9 +51,9 @@ async def clear_ob_targets(db: Database) -> None:
     await db.execute("DELETE FROM budget")
 
 
-async def get_budget_actual_rows(db: Database, month: str | None = None) -> list[dict[str, Any]]:
+async def get_budget_actual_rows(db: Database, month: Optional[str] = None) -> List[Dict[str, Any]]:
     where = "WHERE b.month = :month" if month else ""
-    params: dict[str, Any] = {"month": month} if month else {}
+    params: Dict[str, Any] = {"month": month} if month else {}
     return await db.fetch_all(
         f"""
         SELECT

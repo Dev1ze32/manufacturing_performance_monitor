@@ -1,24 +1,24 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Dict, List, Optional
 
 from ..database import Database
 from ..normalization import normalize_line_name
 
 
-def planned_regular_hours(working_days: float | None, manpower: float | None) -> float | None:
+def planned_regular_hours(working_days: Optional[float], manpower: Optional[float]) -> Optional[float]:
     if working_days is None or manpower is None or working_days <= 0 or manpower <= 0:
         return None
     return working_days * manpower * 8
 
 
-def planned_ot_hours(working_days: float | None, manpower: float | None) -> float | None:
+def planned_ot_hours(working_days: Optional[float], manpower: Optional[float]) -> Optional[float]:
     if working_days is None or manpower is None or working_days <= 0 or manpower <= 0:
         return None
     return working_days * manpower * 4
 
 
-async def list_manhours(db: Database, limit: int = 300) -> list[dict[str, Any]]:
+async def list_manhours(db: Database, limit: int = 300) -> List[Dict[str, Any]]:
     return await db.fetch_all(
         """
         SELECT
@@ -44,13 +44,13 @@ async def save_manhours(
     db: Database,
     month: str,
     line: str,
-    working_days: float | None,
-    manpower: float | None,
-    planned_reg: float | None,
-    actual_reg: float | None,
-    planned_ot: float | None,
-    actual_ot: float | None,
-    absenteeism: float | None,
+    working_days: Optional[float],
+    manpower: Optional[float],
+    planned_reg: Optional[float],
+    actual_reg: Optional[float],
+    planned_ot: Optional[float],
+    actual_ot: Optional[float],
+    absenteeism: Optional[float],
 ) -> None:
     computed_reg = planned_regular_hours(working_days, manpower)
     computed_ot = planned_ot_hours(working_days, manpower)

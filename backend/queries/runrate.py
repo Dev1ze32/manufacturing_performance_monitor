@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Dict, List, Optional
 
 from ..database import Database
 from ..normalization import normalize_line_name, normalize_percent
@@ -46,7 +46,7 @@ effective AS (
 """
 
 
-async def list_monthly_runrate(db: Database, limit: int = 200) -> list[dict[str, Any]]:
+async def list_monthly_runrate(db: Database, limit: int = 200) -> List[Dict[str, Any]]:
     return await db.fetch_all(
         """
         SELECT month, line, capacity, actual_output, machine_availability
@@ -58,9 +58,11 @@ async def list_monthly_runrate(db: Database, limit: int = 200) -> list[dict[str,
     )
 
 
-async def list_weekly_runrate(db: Database, month: str | None = None, limit: int = 300) -> list[dict[str, Any]]:
+async def list_weekly_runrate(
+    db: Database, month: Optional[str] = None, limit: int = 300
+) -> List[Dict[str, Any]]:
     where = "WHERE month = :month" if month else ""
-    params: dict[str, Any] = {"limit": limit}
+    params: Dict[str, Any] = {"limit": limit}
     if month:
         params["month"] = month
 
@@ -76,9 +78,9 @@ async def list_weekly_runrate(db: Database, month: str | None = None, limit: int
     )
 
 
-async def list_effective_runrate(db: Database, month: str | None = None) -> list[dict[str, Any]]:
+async def list_effective_runrate(db: Database, month: Optional[str] = None) -> List[Dict[str, Any]]:
     where = "WHERE month = :month" if month else ""
-    params: dict[str, Any] = {"month": month} if month else {}
+    params: Dict[str, Any] = {"month": month} if month else {}
     return await db.fetch_all(
         f"""
         {EFFECTIVE_CAPACITY_CTE}
@@ -95,9 +97,9 @@ async def save_monthly_runrate(
     db: Database,
     month: str,
     line: str,
-    capacity: float | None,
-    actual_output: float | None,
-    machine_availability: float | None,
+    capacity: Optional[float],
+    actual_output: Optional[float],
+    machine_availability: Optional[float],
 ) -> None:
     await db.execute(
         """
@@ -124,10 +126,10 @@ async def save_weekly_runrate(
     month: str,
     line: str,
     week_label: str,
-    week_num: int | None,
-    capacity: float | None,
-    actual_output: float | None,
-    machine_availability: float | None,
+    week_num: Optional[int],
+    capacity: Optional[float],
+    actual_output: Optional[float],
+    machine_availability: Optional[float],
 ) -> None:
     await db.execute(
         """

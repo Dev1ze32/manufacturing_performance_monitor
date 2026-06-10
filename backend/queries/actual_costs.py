@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Dict, List, Optional, Tuple
 
 from ..database import Database
 
 
-async def list_actual_costs(db: Database, limit: int = 100) -> list[dict[str, Any]]:
+async def list_actual_costs(db: Database, limit: int = 100) -> List[Dict[str, Any]]:
     return await db.fetch_all(
         """
         SELECT month, utility_cost, rm_cost, volume
@@ -28,11 +28,11 @@ async def list_actual_costs(db: Database, limit: int = 100) -> list[dict[str, An
 async def save_actual_cost(
     db: Database,
     month: str,
-    utility_cost: float | None,
-    rm_cost: float | None,
-    volume: float | None,
+    utility_cost: Optional[float],
+    rm_cost: Optional[float],
+    volume: Optional[float],
 ) -> None:
-    statements: list[tuple[str, dict[str, Any]]] = []
+    statements: List[Tuple[str, Dict[str, Any]]] = []
 
     if utility_cost is not None or rm_cost is not None:
         statements.append(

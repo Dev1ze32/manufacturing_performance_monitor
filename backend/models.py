@@ -1,50 +1,52 @@
 from __future__ import annotations
 
+from typing import Optional
+
 from pydantic import BaseModel
 
 
 class ActualCostPayload(BaseModel):
     month: str
-    utility_cost: float | None = None
-    rm_cost: float | None = None
-    volume: float | None = None
+    utility_cost: Optional[float] = None
+    rm_cost: Optional[float] = None
+    volume: Optional[float] = None
 
 
 class OBTargetPayload(BaseModel):
     month: str
-    utility_budget: float | None = None
-    rm_budget: float | None = None
-    volume_budget: float | None = None
+    utility_budget: Optional[float] = None
+    rm_budget: Optional[float] = None
+    volume_budget: Optional[float] = None
 
 
 class RunrateMonthlyPayload(BaseModel):
     month: str
     line: str
-    capacity: float | None = None
-    actual_output: float | None = None
-    machine_availability: float | None = None
+    capacity: Optional[float] = None
+    actual_output: Optional[float] = None
+    machine_availability: Optional[float] = None
 
 
 class RunrateWeeklyPayload(BaseModel):
     month: str
     line: str
     week_label: str
-    week_num: int | None = None
-    capacity: float | None = None
-    actual_output: float | None = None
-    machine_availability: float | None = None
+    week_num: Optional[int] = None
+    capacity: Optional[float] = None
+    actual_output: Optional[float] = None
+    machine_availability: Optional[float] = None
 
 
 class ManhoursPayload(BaseModel):
     month: str
     line: str = ""
-    working_days: float | None = None
-    manpower: float | None = None
-    planned_reg: float | None = None
-    actual_reg: float | None = None
-    planned_ot: float | None = None
-    actual_ot: float | None = None
-    absenteeism: float | None = None
+    working_days: Optional[float] = None
+    manpower: Optional[float] = None
+    planned_reg: Optional[float] = None
+    actual_reg: Optional[float] = None
+    planned_ot: Optional[float] = None
+    actual_ot: Optional[float] = None
+    absenteeism: Optional[float] = None
 
 
 class SavedResponse(BaseModel):
