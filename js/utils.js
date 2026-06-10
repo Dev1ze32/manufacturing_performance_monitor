@@ -29,7 +29,12 @@ export function val(id){ return (document.getElementById(id)||{}).value||''; }
 export function setVal(id,v){ const el=document.getElementById(id); if(el) el.value=v!=null?v:''; }
 export function parseN(id){ const v=parseFloat(val(id)); return isNaN(v)?null:v; }
 export function clearForm(ids){ ids.forEach(id=>setVal(id,'')); }
-export function getGlobalMonth() { return document.getElementById('globalMonth').value; }
+
+// Module-level source of truth for the selected month.
+// No longer depends on <select> having matching <option> elements loaded.
+let _globalMonth = '';
+export function getGlobalMonth() { return _globalMonth; }
+export function setGlobalMonth(m) { _globalMonth = m || ''; }
 
 export function monthOptions(selected='') {
   const months = buildMonthRange(getDistinctMonths());
@@ -50,24 +55,129 @@ export function getDistinctMonths() {
   return [...all].sort();
 }
 
-export function populateMonthFilter() {
-  const sel = document.getElementById('globalMonth');
-  const allMonths = getDistinctMonths();
-  const months = buildMonthRange(allMonths);
-  sel.innerHTML = '<option value="">All Months</option>' + months.map(m=>`<option value="${m}">${fmtMonthLabel(m)}</option>`).join('');
-  if (allMonths.length) sel.value = allMonths[allMonths.length-1];
+// ── FISCAL YEAR HELPERS ────────────────────────────────────────────────────────
+// Fiscal year starts in October. FY26 = Oct 2025 → Sep 2026.
+// getFY(month) returns the fiscal year number for a given YYYY-MM string.
+export function getFY(month) {
+  if (!month) return null;
+  const [y, mo] = month.split('-').map(Number);
+  return mo >= 10 ? y + 1 : y;
 }
+
+// Returns the 12 YYYY-MM months that belong to a given fiscal year, in FY order.
+export function getFYMonths(fy) {
+  const months = [];
+  for (let mo = 10; mo <= 12; mo++) months.push(`${fy - 1}-${String(mo).padStart(2,'0')}`);
+  for (let mo = 1; mo <= 9; mo++) months.push(`${fy}-${String(mo).padStart(2,'0')}`);
+  return months;
+}
+
+// Returns Set of months that have at least one data record.
+export function getMonthsWithData() {
+  return new Set(getDistinctMonths());
+}
+
+// Returns the current fiscal year based on today's date.
+export function getCurrentFY() {
+  const now = new Date();
+  return getFY(`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`);
+}
+
+export function populateMonthFilter() {
+  const dataMonths = getDistinctMonths();
+  const currentFY = getCurrentFY();
+
+  // Auto-select the latest month with data
+  const latestMonth = dataMonths.length ? dataMonths[dataMonths.length - 1] : null;
+  setGlobalMonth(latestMonth);
+
+  // Show the FY that contains the latest data (or current FY if no data)
+  const latestDataFY = latestMonth ? getFY(latestMonth) : currentFY;
+  const displayFY = Math.max(latestDataFY, currentFY);
+
+  renderPeriodPicker(displayFY, latestMonth);
+}
+
+// Renders the custom FY period picker into #period-picker-root
+export function renderPeriodPicker(fy, selectedMonth) {
+  const root = document.getElementById('period-picker-root');
+  if (!root) return;
+
+  const withData = getMonthsWithData();
+  const fyMonths = getFYMonths(fy);
+  const shortNames = ['Oct','Nov','Dec','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep'];
+  const currentFY = getCurrentFY();
+
+  // Determine earliest FY that has data (or current FY if none)
+  const allData = getDistinctMonths();
+  const earliestFY = allData.length ? getFY(allData[0]) : currentFY;
+  const canGoPrev = fy > earliestFY;
+  const canGoNext = fy < currentFY + 1; // allow one FY ahead of current
+
+  // Only show months that actually have data
+  const visibleMonths = fyMonths.map((m, i) => ({ m, i })).filter(({ m }) => withData.has(m));
+
+  const monthButtons = visibleMonths.length
+    ? visibleMonths.map(({ m, i }) => {
+        const isSelected = m === selectedMonth;
+        return `<button class="period-month has-data ${isSelected ? 'selected' : ''}"
+          onclick="window._selectMonth('${m}')"
+          title="${fmtMonthLabel(m)}"
+        >${shortNames[i]}</button>`;
+      }).join('')
+    : `<div class="period-empty">No data for FY${fy}</div>`;
+
+  root.innerHTML = `
+    <div class="period-picker">
+      <div class="period-picker-header">
+        <button class="period-nav ${canGoPrev ? '' : 'disabled'}" onclick="window._fyNav(${fy - 1})" ${canGoPrev ? '' : 'disabled'} title="Previous fiscal year">&#8249;</button>
+        <span class="period-fy-label">FY${fy}</span>
+        <button class="period-nav ${canGoNext ? '' : 'disabled'}" onclick="window._fyNav(${fy + 1})" ${canGoNext ? '' : 'disabled'} title="Next fiscal year">&#8250;</button>
+      </div>
+      <div class="period-months">
+        ${monthButtons}
+      </div>
+      <button class="period-all-btn ${!selectedMonth ? 'selected' : ''}" onclick="window._selectMonth('')">
+        All Months
+      </button>
+    </div>`;
+}
+
+// Wired up in app.js boot
+window._fyNav = function(fy) {
+  // Stay on currently selected month (or null) when navigating FYs
+  renderPeriodPicker(fy, getGlobalMonth() || null);
+};
+
+window._selectMonth = function(month) {
+  // Update module-level state — this is what getGlobalMonth() reads
+  setGlobalMonth(month);
+  // Re-render picker to show the new selection
+  const fy = month ? getFY(month) : getCurrentFY();
+  const dataMonths = getDistinctMonths();
+  const latestFY = dataMonths.length ? getFY(dataMonths[dataMonths.length - 1]) : getCurrentFY();
+  renderPeriodPicker(month ? fy : Math.max(latestFY, getCurrentFY()), month || null);
+  // Trigger dashboard refresh
+  if (window.onGlobalMonthChange) window.onGlobalMonthChange();
+};
 
 function buildMonthRange(existingMonths = []) {
   const validExisting = existingMonths.filter(m => /^\d{4}-\d{2}$/.test(m)).sort();
-  const now = new Date();
+  // FY-aligned start: Oct 2024 (FY25 start)
   const defaultStart = '2024-10';
-  const defaultEnd = `${now.getFullYear() + 5}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  // End: always through the END of the current fiscal year so data entry
+  // for upcoming months is always possible — no manual maintenance needed.
+  // Current FY ends in Sep of the FY number (e.g. FY26 ends Sep 2026).
+  // We extend one full FY ahead so the next year's months are also enterable.
+  const fy = getCurrentFY();
+  const fyEnd = `${fy}-09`;           // Sep of current FY = last month of FY
+  const nextFyEnd = `${fy + 1}-09`;  // Sep of next FY = always one year of runway
+  const dataEnd = validExisting.length ? validExisting[validExisting.length - 1] : '';
+  const defaultEnd = maxMonth(nextFyEnd, dataEnd || nextFyEnd);
   const start = validExisting.length ? minMonth(defaultStart, validExisting[0]) : defaultStart;
-  const end = validExisting.length ? maxMonth(defaultEnd, validExisting[validExisting.length - 1]) : defaultEnd;
   const months = [];
   let d = monthToDate(start);
-  const endDate = monthToDate(end);
+  const endDate = monthToDate(defaultEnd);
   while (d <= endDate) {
     months.push(d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'));
     d.setMonth(d.getMonth() + 1);

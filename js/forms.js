@@ -231,7 +231,7 @@ function renderEntryCapacity(c) {
           <div class="form-grid">
             <div class="form-group">
               <label>Month *</label>
-              <select id="cw_month"><option value="">Select month...</option>${monthOptions()}</select>
+              <select id="cw_month" onchange="onCapMonthChange()"><option value="">Select month...</option>${monthOptions()}</select>
             </div>
             <div class="form-group">
               <label>Production Line *</label>
@@ -239,14 +239,11 @@ function renderEntryCapacity(c) {
               <datalist id="cw_line_list">${existingLines.map(l => `<option value="${l}">`).join('')}</datalist>
             </div>
             <div class="form-group">
-              <label>Week Label *</label>
-              <input type="text" id="cw_wlabel" placeholder="e.g. APR WEEK 15">
-              <span class="form-hint">Use consistent format: [MON] WEEK [N] or [MON] WK[N]</span>
-            </div>
-            <div class="form-group">
-              <label>Week Number</label>
-              <input type="number" id="cw_wnum" placeholder="e.g. 15" min="1" max="53">
-              <span class="form-hint">Calendar week number (used for sort order)</span>
+              <label>Week *</label>
+              <select id="cw_week" onchange="onCapWeekChange()">
+                <option value="">— select month first —</option>
+              </select>
+              <span class="form-hint">Weeks are auto-generated from the selected month</span>
             </div>
             <div class="form-group">
               <label>Capacity (units) *</label>
@@ -260,7 +257,7 @@ function renderEntryCapacity(c) {
           <div id="cw_preview" style="margin-top:12px;font-size:13px;color:var(--gray-500)"></div>
           <div style="margin-top:16px;display:flex;gap:10px">
             <button class="btn btn-primary" onclick="saveWeeklyCapacity()">Save Weekly Runrate</button>
-            <button class="btn btn-secondary" onclick="clearForm(['cw_month','cw_line','cw_wlabel','cw_wnum','cw_cap','cw_act'])">Clear</button>
+            <button class="btn btn-secondary" onclick="clearWeeklyForm()">Clear</button>
           </div>
         </div>
       </div>
@@ -317,6 +314,72 @@ function renderEntryCapacity(c) {
   `;
 }
 
+// ── Week picker helpers ──────────────────────────────────────────────────────
+
+// ISO week number for a given Date
+function getISOWeek(date) {
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  return Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
+}
+
+// Get all calendar weeks that fall (at least partially) in a YYYY-MM month.
+// Returns [{wnum, label}] in calendar order.
+function getWeeksForMonth(monthStr) {
+  if (!monthStr) return [];
+  const [y, m] = monthStr.split('-').map(Number);
+  const monthNames = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
+  const mon = monthNames[m - 1];
+  const firstDay = new Date(y, m - 1, 1);
+  const lastDay  = new Date(y, m, 0);
+  const seenWeeks = new Set();
+  const weeks = [];
+  for (let d = new Date(firstDay); d <= lastDay; d.setDate(d.getDate() + 1)) {
+    const wnum = getISOWeek(d);
+    if (!seenWeeks.has(wnum)) {
+      seenWeeks.add(wnum);
+      weeks.push({ wnum, label: `${mon} WEEK ${wnum}` });
+    }
+  }
+  return weeks;
+}
+
+function populateCapWeekOptions(monthStr, selectedWnum, selectedLabel) {
+  const sel = document.getElementById('cw_week');
+  if (!sel) return;
+  const weeks = getWeeksForMonth(monthStr);
+  if (!weeks.length) {
+    sel.innerHTML = '<option value="">— select month first —</option>';
+    return;
+  }
+  sel.innerHTML = '<option value="">Select week...</option>' +
+    weeks.map(w => {
+      const v = `${w.wnum}|${w.label}`;
+      // Match by wnum, or by existing label if editing a legacy record
+      const isSel = (selectedWnum && w.wnum == selectedWnum) ||
+                    (selectedLabel && selectedLabel.toUpperCase() === w.label);
+      return `<option value="${v}" ${isSel ? 'selected' : ''}>${w.label}</option>`;
+    }).join('');
+}
+
+window.onCapMonthChange = function() {
+  const month = val('cw_month');
+  populateCapWeekOptions(month, null, null);
+};
+
+window.onCapWeekChange = function() {
+  // Nothing extra needed — value is read at save time
+};
+
+window.clearWeeklyForm = function() {
+  clearForm(['cw_month', 'cw_line', 'cw_cap', 'cw_act']);
+  const sel = document.getElementById('cw_week');
+  if (sel) sel.innerHTML = '<option value="">— select month first —</option>';
+  const prev = document.getElementById('cw_preview');
+  if (prev) prev.innerHTML = '';
+};
+
 window.switchCapTab = function(tab, btn) {
   btn.closest('.tabs').querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   btn.classList.add('active');
@@ -353,11 +416,14 @@ function saveCapacity() {
 function saveWeeklyCapacity() {
   const month  = val('cw_month');
   const line   = val('cw_line').trim();
-  const wlabel = val('cw_wlabel').trim().toUpperCase();
-  const wnum   = parseInt(val('cw_wnum')) || null;
+  const weekVal = val('cw_week'); // "15|APR WEEK 15"
   const cap    = parseFloat(val('cw_cap'));
   const act    = parseFloat(val('cw_act'));
-  if (!month || !line || !wlabel || isNaN(cap) || isNaN(act)) { showToast('Month, line, week label, capacity, and actual are required', 'error'); return; }
+  if (!month || !line || !weekVal) { showToast('Month, line, and week are required', 'error'); return; }
+  if (isNaN(cap) || isNaN(act)) { showToast('Capacity and actual output are required', 'error'); return; }
+  const [wnumStr, ...labelParts] = weekVal.split('|');
+  const wlabel = labelParts.join('|');
+  const wnum   = parseInt(wnumStr) || null;
   run(`INSERT INTO capacity_weekly (month,line,week_label,week_num,capacity,actual_output) VALUES (?,?,?,?,?,?)
     ON CONFLICT(month,line,week_label) DO UPDATE SET week_num=excluded.week_num, capacity=excluded.capacity, actual_output=excluded.actual_output`,
     [month, line, wlabel, wnum, cap, act]);
@@ -377,9 +443,12 @@ function editWeeklyCap(id) {
   // Switch to weekly tab
   document.getElementById('cap-panel-monthly').style.display = 'none';
   document.getElementById('cap-panel-weekly').style.display  = '';
-  setVal('cw_month', r.month); setVal('cw_line', r.line);
-  setVal('cw_wlabel', r.week_label); setVal('cw_wnum', r.week_num);
-  setVal('cw_cap', r.capacity); setVal('cw_act', r.actual_output);
+  setVal('cw_month', r.month);
+  setVal('cw_line', r.line);
+  setVal('cw_cap', r.capacity);
+  setVal('cw_act', r.actual_output);
+  // Rebuild week options for this month, then select the matching week
+  populateCapWeekOptions(r.month, r.week_num, r.week_label);
 }
 
 function deleteCapacity(month, line) {

@@ -41,9 +41,11 @@
     </nav>
     <div class="month-filter">
       <label>Viewing Period</label>
-      <select id="globalMonth" onchange="onGlobalMonthChange()">
+      <!-- Hidden select keeps getGlobalMonth() working without changing any other JS -->
+      <select id="globalMonth" style="display:none" onchange="onGlobalMonthChange()">
         <option value="">All Months</option>
       </select>
+      <div id="period-picker-root"></div>
     </div>
   </aside>
 

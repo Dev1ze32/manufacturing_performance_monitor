@@ -1,6 +1,9 @@
 import { initDB, run } from './database.js';
 import {
   getGlobalMonth,
+  setGlobalMonth,
+  getFY,
+  renderPeriodPicker,
   populateMonthFilter,
   showToast,
   clearForm,
@@ -59,11 +62,10 @@ function resolveRunrateManhoursMonth(selectedMonth) {
 
   if (!availableMonths.length || availableMonths.includes(selectedMonth)) return selectedMonth;
 
+  // Selected month has no data — fall back to latest available and update the picker
   const fallbackMonth = availableMonths[availableMonths.length - 1];
-  const selector = document.getElementById('globalMonth');
-  if (selector && [...selector.options].some(option => option.value === fallbackMonth)) {
-    selector.value = fallbackMonth;
-  }
+  setGlobalMonth(fallbackMonth);
+  renderPeriodPicker(getFY(fallbackMonth), fallbackMonth);
   return fallbackMonth;
 }
 
