@@ -1071,103 +1071,223 @@ function renderManhours(c, month) {
  
 // ── LOSS DASHBOARD ─────────────────────────────────────────────────────────────
 function renderLoss(c, month) {
-  const filter = month ? `WHERE month = '${month}'` : '';
-  const rows = query(`SELECT * FROM loss ${filter} ORDER BY month DESC, line`);
   const mLabel = month ? fmtMonthLabel(month) : 'All Months';
- 
-  let totRun=0,totAbs=0,totMH=0;
-  rows.forEach(r=>{totRun+=r.runrate_loss||0;totAbs+=r.absenteeism_loss||0;totMH+=r.manhours_loss||0;});
-  const total=totRun+totAbs+totMH;
-  const runPct=calcLossContribution(totRun,total), absPct=calcLossContribution(totAbs,total), mhPct=calcLossContribution(totMH,total);
- 
+
+  // ── Pull raw data ─────────────────────────────────────────────────────────────
+  const rrRows = getRunrateSummaryRows(month);   // {month, line, capacity, actual_output}
+  const mhRows = getManhoursSummaryRows(month);  // {month, line, working_days, manpower, planned_reg, actual_reg, planned_ot, actual_ot, absenteeism}
+  const mhMap  = new Map(mhRows.map(r => [`${r.month}|${r.line}`, r]));
+
+  // ── Per-month-line rows (for the detail table) ────────────────────────────────
+  const keySet = new Set([
+    ...rrRows.map(r => `${r.month}|${r.line}`),
+    ...mhRows.map(r => `${r.month}|${r.line}`)
+  ]);
+
+  const rows = [...keySet].sort().map(key => {
+    const [m, line] = key.split('|');
+    const rr = rrRows.find(r => r.month === m && r.line === line) || {};
+    const mh = mhMap.get(key) || {};
+
+    const runrateLoss = (rr.capacity > 0) ? 1 - (rr.actual_output / rr.capacity) : null;
+
+    const personDays = (mh.working_days > 0 && mh.manpower > 0) ? mh.working_days * mh.manpower : null;
+    const absLoss = (personDays && mh.absenteeism != null) ? mh.absenteeism / personDays : null;
+
+    const plannedMH = (mh.planned_reg || 0) + (mh.planned_ot || 0);
+    const actualMH  = (mh.actual_reg  || 0) + (mh.actual_ot  || 0);
+    const mhLoss = (plannedMH > 0) ? 1 - (actualMH / plannedMH) : null;
+
+    const rowTotal = (runrateLoss || 0) + (absLoss || 0) + (mhLoss || 0);
+    return {
+      month: m, line, runrateLoss, absLoss, mhLoss, total: rowTotal,
+      runPct: rowTotal > 0 && runrateLoss != null ? runrateLoss / rowTotal : null,
+      absPct: rowTotal > 0 && absLoss     != null ? absLoss     / rowTotal : null,
+      mhPct:  rowTotal > 0 && mhLoss      != null ? mhLoss      / rowTotal : null,
+      // keep raw components for aggregation
+      _rrCap: rr.capacity || 0, _rrAct: rr.actual_output || 0,
+      _personDays: personDays || 0, _absDays: mh.absenteeism || 0,
+      _plannedMH: plannedMH, _actualMH: actualMH
+    };
+  });
+
+  // ── Aggregate for KPI cards & chart ──────────────────────────────────────────
+  // Match Excel's approach: aggregate raw totals first, THEN compute loss rate.
+  // e.g.  runrate loss = 1 − SUM(actual) / SUM(capacity)  (not avg of monthly rates)
+  let totalCap = 0, totalAct = 0;
+  let totalPersonDays = 0, totalAbsDays = 0;
+  let totalPlannedMH = 0, totalActualMH = 0;
+
+  rows.forEach(r => {
+    totalCap        += r._rrCap;
+    totalAct        += r._rrAct;
+    totalPersonDays += r._personDays;
+    totalAbsDays    += r._absDays;
+    totalPlannedMH  += r._plannedMH;
+    totalActualMH   += r._actualMH;
+  });
+
+  const aggRunLoss = totalCap > 0 ? 1 - totalAct / totalCap : null;
+  const aggAbsLoss = totalPersonDays > 0 ? totalAbsDays / totalPersonDays : null;
+  const aggMhLoss  = totalPlannedMH  > 0 ? 1 - totalActualMH / totalPlannedMH : null;
+
+  const aggTotal = (aggRunLoss || 0) + (aggAbsLoss || 0) + (aggMhLoss || 0);
+  const aggRunPct = aggTotal > 0 && aggRunLoss != null ? aggRunLoss / aggTotal : null;
+  const aggAbsPct = aggTotal > 0 && aggAbsLoss != null ? aggAbsLoss / aggTotal : null;
+  const aggMhPct  = aggTotal > 0 && aggMhLoss  != null ? aggMhLoss  / aggTotal : null;
+
+  const hasData = rows.length > 0;
+
+  // Helper: colour class for contribution cells
+  const contribClass = pct => pct > 0.5 ? 'td-red' : pct > 0.25 ? 'var(--amber)' : '';
+
   c.innerHTML = `
     <div class="page-header">
       <h1>Loss Analysis</h1>
-      <p>Runrate, absenteeism, and manhours loss contribution — ${mLabel}</p>
+      <p>Derived from Runrate Efficiency &amp; Manhours data — <strong>${mLabel}</strong></p>
     </div>
+    <div class="info-block" style="margin-bottom:20px">
+      <strong>Fully derived.</strong>
+      Runrate Loss = 1 − (Actual ÷ Capacity) &nbsp;|&nbsp;
+      Absenteeism Loss = Absences ÷ (Working Days × Manpower) &nbsp;|&nbsp;
+      Manhours Loss = 1 − (Actual MH ÷ Planned MH) &nbsp;|&nbsp;
+      % Contribution = Individual Loss ÷ Sum of All Three
+    </div>
+
     <div class="metrics-grid section-gap">
       <div class="metric-card">
-        <div class="metric-label">Runrate Loss</div>
-        <div class="metric-value">${runPct!==null?(runPct*100).toFixed(1)+'%':'—'}</div>
-        <div class="metric-sub">contribution to total loss</div>
+        <div class="metric-label">Runrate Loss %</div>
+        <div class="metric-value">${aggRunLoss !== null ? (aggRunLoss*100).toFixed(2)+'%' : '—'}</div>
+        <div class="metric-sub">${aggRunPct !== null ? 'Contrib: '+(aggRunPct*100).toFixed(1)+'% of total' : 'no runrate data'}</div>
       </div>
       <div class="metric-card">
-        <div class="metric-label">Absenteeism Loss</div>
-        <div class="metric-value">${absPct!==null?(absPct*100).toFixed(1)+'%':'—'}</div>
-        <div class="metric-sub">contribution to total loss</div>
+        <div class="metric-label">Absenteeism Loss %</div>
+        <div class="metric-value">${aggAbsLoss !== null ? (aggAbsLoss*100).toFixed(2)+'%' : '—'}</div>
+        <div class="metric-sub">${aggAbsPct !== null ? 'Contrib: '+(aggAbsPct*100).toFixed(1)+'% of total' : 'no manhours data'}</div>
       </div>
       <div class="metric-card">
-        <div class="metric-label">Manhours Loss</div>
-        <div class="metric-value">${mhPct!==null?(mhPct*100).toFixed(1)+'%':'—'}</div>
-        <div class="metric-sub">contribution to total loss</div>
+        <div class="metric-label">Manhours Loss %</div>
+        <div class="metric-value">${aggMhLoss !== null ? (aggMhLoss*100).toFixed(2)+'%' : '—'}</div>
+        <div class="metric-sub">${aggMhPct !== null ? 'Contrib: '+(aggMhPct*100).toFixed(1)+'% of total' : 'no manhours data'}</div>
       </div>
       <div class="metric-card">
         <div class="metric-label">Total Loss</div>
-        <div class="metric-value">${fmtN(total,2)}</div>
-        <div class="metric-sub">combined loss value</div>
+        <div class="metric-value">${aggTotal > 0 ? (aggTotal*100).toFixed(2)+'%' : '—'}</div>
+        <div class="metric-sub">sum of three loss types</div>
       </div>
     </div>
+
     <div class="grid-2 section-gap">
       <div class="card">
-        <div class="card-title" style="margin-bottom:14px">Loss Contribution</div>
+        <div class="card-title" style="margin-bottom:14px">% Contribution Factor</div>
         <div class="chart-container">
-          <canvas id="lossPieChart" aria-label="Loss contribution pie">Loss contribution breakdown</canvas>
+          <canvas id="lossPieChart" aria-label="Loss contribution factor">Loss contribution breakdown</canvas>
         </div>
       </div>
       <div class="card">
         <div class="card-title" style="margin-bottom:14px">Loss Breakdown</div>
-        ${total > 0 ? `
-          <div style="margin-bottom:16px">
-            <div style="display:flex;justify-content:space-between;margin-bottom:4px;font-size:13px"><span>Runrate Loss</span><strong>${runPct!==null?(runPct*100).toFixed(1)+'%':'—'}</strong></div>
-            <div class="progress-bar"><div class="progress-fill progress-amber" style="width:${runPct?runPct*100:0}%"></div></div>
+        ${hasData ? `
+          <div style="margin-bottom:20px">
+            <div style="display:flex;justify-content:space-between;margin-bottom:6px;font-size:13px">
+              <span style="font-weight:600">Runrate Loss</span>
+              <span>
+                <span style="color:var(--gray-500);font-size:12px;margin-right:8px">${aggRunLoss !== null ? (aggRunLoss*100).toFixed(2)+'%' : '—'}</span>
+                <strong style="color:var(--amber)">${aggRunPct !== null ? (aggRunPct*100).toFixed(1)+'%' : '—'}</strong>
+              </span>
+            </div>
+            <div class="progress-bar"><div class="progress-fill progress-amber" style="width:${aggRunPct ? Math.min(aggRunPct*100,100) : 0}%"></div></div>
           </div>
-          <div style="margin-bottom:16px">
-            <div style="display:flex;justify-content:space-between;margin-bottom:4px;font-size:13px"><span>Absenteeism Loss</span><strong>${absPct!==null?(absPct*100).toFixed(1)+'%':'—'}</strong></div>
-            <div class="progress-bar"><div class="progress-fill progress-red" style="width:${absPct?absPct*100:0}%"></div></div>
+          <div style="margin-bottom:20px">
+            <div style="display:flex;justify-content:space-between;margin-bottom:6px;font-size:13px">
+              <span style="font-weight:600">Absenteeism Loss</span>
+              <span>
+                <span style="color:var(--gray-500);font-size:12px;margin-right:8px">${aggAbsLoss !== null ? (aggAbsLoss*100).toFixed(2)+'%' : '—'}</span>
+                <strong style="color:var(--red)">${aggAbsPct !== null ? (aggAbsPct*100).toFixed(1)+'%' : '—'}</strong>
+              </span>
+            </div>
+            <div class="progress-bar"><div class="progress-fill progress-red" style="width:${aggAbsPct ? Math.min(aggAbsPct*100,100) : 0}%"></div></div>
           </div>
-          <div style="margin-bottom:16px">
-            <div style="display:flex;justify-content:space-between;margin-bottom:4px;font-size:13px"><span>Manhours Loss</span><strong>${mhPct!==null?(mhPct*100).toFixed(1)+'%':'—'}</strong></div>
-            <div class="progress-bar"><div class="progress-fill progress-green" style="width:${mhPct?mhPct*100:0}%"></div></div>
+          <div style="margin-bottom:20px">
+            <div style="display:flex;justify-content:space-between;margin-bottom:6px;font-size:13px">
+              <span style="font-weight:600">Manhours Loss</span>
+              <span>
+                <span style="color:var(--gray-500);font-size:12px;margin-right:8px">${aggMhLoss !== null ? (aggMhLoss*100).toFixed(2)+'%' : '—'}</span>
+                <strong style="color:var(--blue)">${aggMhPct !== null ? (aggMhPct*100).toFixed(1)+'%' : '—'}</strong>
+              </span>
+            </div>
+            <div class="progress-bar"><div class="progress-fill" style="background:var(--blue);width:${aggMhPct ? Math.min(aggMhPct*100,100) : 0}%"></div></div>
           </div>
-        ` : '<div class="empty"><p>No loss data for this period.</p></div>'}
+          <div style="font-size:11px;color:var(--gray-400);padding-top:8px;border-top:1px solid var(--gray-200)">
+            Left value = raw loss %; bold right value = % contribution factor
+          </div>
+        ` : '<div class="empty"><p>No data yet. Enter Runrate Efficiency and Manhours data first.</p></div>'}
       </div>
     </div>
+
     <div class="card">
-      <div class="card-title" style="margin-bottom:14px">Loss Records</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+        <div class="card-title">Loss by Line — ${mLabel}</div>
+        ${!month ? '<div style="font-size:11px;color:var(--gray-400)">Select a month in the sidebar to filter by period</div>' : ''}
+      </div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Month</th><th>Line</th><th>Runrate Loss</th><th>Absenteeism Loss</th><th>Manhours Loss</th><th>Total</th><th>Runrate %</th><th>Absent %</th><th>MH %</th></tr></thead>
+          <thead>
+            <tr>
+              <th>Month</th><th>Line</th>
+              <th class="td-number">Runrate Loss %</th>
+              <th class="td-number">Absence Loss %</th>
+              <th class="td-number">Manhours Loss %</th>
+              <th class="td-number" style="border-left:2px solid var(--gray-200)">Runrate Contrib</th>
+              <th class="td-number">Absence Contrib</th>
+              <th class="td-number">MH Contrib</th>
+            </tr>
+          </thead>
           <tbody>
-            ${rows.length ? rows.map(r=>{
-              const tot=( r.runrate_loss||0)+(r.absenteeism_loss||0)+(r.manhours_loss||0);
-              return `<tr>
-                <td>${fmtMonthLabel(r.month)}</td>
-                <td>${r.line||'—'}</td>
-                <td class="td-number">${fmtN(r.runrate_loss,2)}</td>
-                <td class="td-number">${fmtN(r.absenteeism_loss,2)}</td>
-                <td class="td-number">${fmtN(r.manhours_loss,2)}</td>
-                <td class="td-number"><strong>${fmtN(tot,2)}</strong></td>
-                <td class="td-number">${tot>0?((r.runrate_loss/tot)*100).toFixed(1)+'%':'—'}</td>
-                <td class="td-number">${tot>0?((r.absenteeism_loss/tot)*100).toFixed(1)+'%':'—'}</td>
-                <td class="td-number">${tot>0?((r.manhours_loss/tot)*100).toFixed(1)+'%':'—'}</td>
-              </tr>`;
-            }).join('') : '<tr><td colspan="9"><div class="empty"><p>No loss data yet.</p></div></td></tr>'}
+            ${hasData ? rows.map(r => `<tr>
+              <td>${fmtMonthLabel(r.month)}</td>
+              <td><strong>${r.line || '—'}</strong></td>
+              <td class="td-number">${r.runrateLoss != null ? (r.runrateLoss*100).toFixed(2)+'%' : '—'}</td>
+              <td class="td-number">${r.absLoss    != null ? (r.absLoss*100).toFixed(2)+'%'     : '—'}</td>
+              <td class="td-number">${r.mhLoss     != null ? (r.mhLoss*100).toFixed(2)+'%'      : '—'}</td>
+              <td class="td-number td-red" style="border-left:2px solid var(--gray-200)">${r.runPct != null ? (r.runPct*100).toFixed(1)+'%' : '—'}</td>
+              <td class="td-number td-red">${r.absPct != null ? (r.absPct*100).toFixed(1)+'%' : '—'}</td>
+              <td class="td-number td-red">${r.mhPct  != null ? (r.mhPct*100).toFixed(1)+'%'  : '—'}</td>
+            </tr>`).join('')
+            : '<tr><td colspan="8"><div class="empty"><p>No data yet.</p></div></td></tr>'}
           </tbody>
         </table>
       </div>
     </div>
   `;
- 
+
   destroyChart('lossPie');
-  const ctx=document.getElementById('lossPieChart');
-  if(ctx && total>0){
-    charts['lossPie']=new Chart(ctx,{
-      type:'doughnut',
-      data:{labels:['Runrate Loss','Absenteeism Loss','Manhours Loss'],
-        datasets:[{data:[totRun,totAbs,totMH],backgroundColor:['#d97706','#dc2626','#1a56db'],borderWidth:2,borderColor:'#fff'}]},
-      options:{responsive:true,maintainAspectRatio:false,
-        plugins:{legend:{labels:{font:{size:11},boxWidth:10}},
-          tooltip:{callbacks:{label:ctx=>`${(ctx.parsed/(totRun+totAbs+totMH)*100).toFixed(1)}% (${fmtN(ctx.parsed,2)})`}}}}
+  const ctx = document.getElementById('lossPieChart');
+  if (ctx && aggTotal > 0) {
+    charts['lossPie'] = new Chart(ctx, {
+      type: 'doughnut',
+      data: {
+        labels: ['Runrate Loss', 'Absenteeism Loss', 'Manhours Loss'],
+        datasets: [{
+          data: [aggRunLoss || 0, aggAbsLoss || 0, aggMhLoss || 0],
+          backgroundColor: ['#d97706','#dc2626','#1a56db'],
+          borderWidth: 2, borderColor: '#fff'
+        }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: { position: 'bottom', labels: { font: { size: 11 }, boxWidth: 12, padding: 16 } },
+          tooltip: {
+            callbacks: {
+              label: ctx => {
+                const val = ctx.parsed;
+                const contrib = aggTotal > 0 ? (val / aggTotal * 100).toFixed(1) : '—';
+                return ` ${(val*100).toFixed(2)}% loss  (${contrib}% of total)`;
+              }
+            }
+          }
+        }
+      }
     });
   }
 }

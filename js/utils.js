@@ -55,6 +55,46 @@ export function getDistinctMonths() {
   return [...all].sort();
 }
 
+// Returns months that have relevant data for a specific dashboard page.
+// Data entry pages fall through to all months (they show everything).
+export function getMonthsForPage(page) {
+  switch (page) {
+    case 'cost':
+      return unionMonths(
+        query('SELECT DISTINCT month FROM utilities'),
+        query('SELECT DISTINCT month FROM production')
+      );
+    case 'manhours':
+      return unionMonths(
+        query('SELECT DISTINCT month FROM capacity_weekly'),
+        query('SELECT DISTINCT month FROM manhours')
+      );
+    case 'loss':
+      return unionMonths(
+        query('SELECT DISTINCT month FROM capacity_weekly'),
+        query('SELECT DISTINCT month FROM manhours')
+      );
+    case 'budget':
+      return unionMonths(
+        query('SELECT DISTINCT month FROM budget'),
+        query('SELECT DISTINCT month FROM utilities'),
+        query('SELECT DISTINCT month FROM production')
+      );
+    case 'executive':
+      // Executive uses everything — show all months that have any data
+      return getDistinctMonths();
+    default:
+      // Data entry pages and others: all months
+      return getDistinctMonths();
+  }
+}
+
+function unionMonths(...sets) {
+  const all = new Set();
+  sets.forEach(s => s.forEach(r => all.add(r.month)));
+  return [...all].sort();
+}
+
 // ── FISCAL YEAR HELPERS ────────────────────────────────────────────────────────
 // Fiscal year starts in October. FY26 = Oct 2025 → Sep 2026.
 // getFY(month) returns the fiscal year number for a given YYYY-MM string.
@@ -83,27 +123,31 @@ export function getCurrentFY() {
   return getFY(`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`);
 }
 
-export function populateMonthFilter() {
-  const dataMonths = getDistinctMonths();
+export function populateMonthFilter(page) {
+  const dataMonths = page ? getMonthsForPage(page) : getDistinctMonths();
   const currentFY = getCurrentFY();
 
-  // Auto-select the latest month with data
+  // Auto-select latest month with data for this page; keep current selection if it's valid
+  const currentSel = getGlobalMonth();
   const latestMonth = dataMonths.length ? dataMonths[dataMonths.length - 1] : null;
-  setGlobalMonth(latestMonth);
+  const validSel = currentSel && dataMonths.includes(currentSel) ? currentSel : latestMonth;
+  setGlobalMonth(validSel);
 
-  // Show the FY that contains the latest data (or current FY if no data)
-  const latestDataFY = latestMonth ? getFY(latestMonth) : currentFY;
+  const latestDataFY = validSel ? getFY(validSel) : currentFY;
   const displayFY = Math.max(latestDataFY, currentFY);
 
-  renderPeriodPicker(displayFY, latestMonth);
+  renderPeriodPicker(displayFY, validSel, new Set(dataMonths));
 }
 
 // Renders the custom FY period picker into #period-picker-root
-export function renderPeriodPicker(fy, selectedMonth) {
+// relevantMonths: optional Set of months to show — defaults to all months with any data
+export function renderPeriodPicker(fy, selectedMonth, relevantMonths) {
   const root = document.getElementById('period-picker-root');
   if (!root) return;
 
-  const withData = getMonthsWithData();
+  const withData = relevantMonths || getMonthsWithData();
+  // Cache for _fyNav and _selectMonth to reuse the same filter
+  window._currentPickerMonths = withData;
   const fyMonths = getFYMonths(fy);
   const shortNames = ['Oct','Nov','Dec','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep'];
   const currentFY = getCurrentFY();
@@ -145,19 +189,16 @@ export function renderPeriodPicker(fy, selectedMonth) {
 
 // Wired up in app.js boot
 window._fyNav = function(fy) {
-  // Stay on currently selected month (or null) when navigating FYs
-  renderPeriodPicker(fy, getGlobalMonth() || null);
+  renderPeriodPicker(fy, getGlobalMonth() || null, window._currentPickerMonths);
 };
 
 window._selectMonth = function(month) {
-  // Update module-level state — this is what getGlobalMonth() reads
   setGlobalMonth(month);
-  // Re-render picker to show the new selection
   const fy = month ? getFY(month) : getCurrentFY();
-  const dataMonths = getDistinctMonths();
-  const latestFY = dataMonths.length ? getFY(dataMonths[dataMonths.length - 1]) : getCurrentFY();
-  renderPeriodPicker(month ? fy : Math.max(latestFY, getCurrentFY()), month || null);
-  // Trigger dashboard refresh
+  const relevantMonths = window._currentPickerMonths;
+  const months = relevantMonths ? [...relevantMonths] : getDistinctMonths();
+  const latestFY = months.length ? getFY(months[months.length - 1]) : getCurrentFY();
+  renderPeriodPicker(month ? fy : Math.max(latestFY, getCurrentFY()), month || null, relevantMonths);
   if (window.onGlobalMonthChange) window.onGlobalMonthChange();
 };
 

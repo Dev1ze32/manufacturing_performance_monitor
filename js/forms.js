@@ -657,95 +657,62 @@ function clearManhoursRecords() {
  
 // ── ENTRY: LOSS ────────────────────────────────────────────────────────────────
 function renderEntryLoss(c) {
-  const rows = query('SELECT * FROM loss ORDER BY month DESC, line LIMIT 60');
   c.innerHTML = `
     <div class="page-header">
-      <h1>Loss Analysis Entry</h1>
-      <p>Enter runrate, absenteeism, and manhours loss values per line</p>
-    </div>
-    <div class="card section-gap">
-      <div class="info-block">
-        <strong>Formula:</strong> Loss Contribution % = Individual Loss ÷ Total Loss × 100%
-      </div>
-      <div class="form-section">
-        <div class="form-section-title">Add / Update Record</div>
-        <div class="form-grid">
-          <div class="form-group">
-            <label>Month *</label>
-            <select id="l_month"><option value="">Select month...</option>${monthOptions()}</select>
-          </div>
-          <div class="form-group">
-            <label>Line / Group</label>
-            <input type="text" id="l_line" placeholder="e.g. Line 4 ES">
-            <span class="form-hint">Leave blank for plant-wide</span>
-          </div>
-          <div class="form-group">
-            <label>Runrate Loss</label>
-            <input type="number" id="l_run" placeholder="e.g. 0.0683" step="0.0001">
-            <span class="form-hint">Enter as decimal (e.g. 0.0683 = 6.83%)</span>
-          </div>
-          <div class="form-group">
-            <label>Absenteeism Loss</label>
-            <input type="number" id="l_abs" placeholder="e.g. 0.0296" step="0.0001">
-            <span class="form-hint">Enter as decimal (e.g. 0.0296 = 2.96%)</span>
-          </div>
-          <div class="form-group">
-            <label>Manhours Loss</label>
-            <input type="number" id="l_mh" placeholder="e.g. 0.2167" step="0.0001">
-            <span class="form-hint">Enter as decimal (e.g. 0.2167 = 21.67%)</span>
-          </div>
-        </div>
-        <div style="margin-top:16px;display:flex;gap:10px">
-          <button class="btn btn-primary" onclick="saveLoss()">Save Record</button>
-          <button class="btn btn-secondary" onclick="clearForm(['l_month','l_line','l_run','l_abs','l_mh'])">Clear</button>
-        </div>
-      </div>
+      <h1>Loss Analysis</h1>
+      <p>No manual entry required — all values are derived automatically</p>
     </div>
     <div class="card">
-      <div class="records-header">
-        <div class="card-title">Existing Records</div>
-        ${rows.length ? `<button class="btn btn-sm btn-danger" onclick="clearExistingRecords('loss','Loss records')">Clear Records</button>` : ''}
+      <div class="info-block" style="margin-bottom:20px">
+        <strong>Loss data is fully derived.</strong> No separate entry is needed here.
+        The Loss Analysis dashboard computes all three loss types directly from your existing data entries.
       </div>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Month</th><th>Line</th><th>Runrate Loss</th><th>Absenteeism Loss</th><th>Manhours Loss</th><th>Total</th><th>Runrate %</th><th>Actions</th></tr></thead>
+      <div class="form-section">
+        <div class="form-section-title">How each loss is calculated</div>
+        <table style="width:100%;font-size:13px;border-collapse:collapse">
+          <thead>
+            <tr>
+              <th style="text-align:left;padding:8px 12px;background:var(--gray-50);border-bottom:1px solid var(--gray-200)">Loss Type</th>
+              <th style="text-align:left;padding:8px 12px;background:var(--gray-50);border-bottom:1px solid var(--gray-200)">Formula</th>
+              <th style="text-align:left;padding:8px 12px;background:var(--gray-50);border-bottom:1px solid var(--gray-200)">Data Source</th>
+            </tr>
+          </thead>
           <tbody>
-            ${rows.length ? rows.map(r=>{
-              const tot=(r.runrate_loss||0)+(r.absenteeism_loss||0)+(r.manhours_loss||0);
-              return `<tr>
-                <td>${fmtMonthLabel(r.month)}</td><td>${r.line||'—'}</td>
-                <td class="td-number">${fmtN(r.runrate_loss,4)}</td>
-                <td class="td-number">${fmtN(r.absenteeism_loss,4)}</td>
-                <td class="td-number">${fmtN(r.manhours_loss,4)}</td>
-                <td class="td-number"><strong>${fmtN(tot,4)}</strong></td>
-                <td class="td-number">${tot>0?((r.runrate_loss/tot)*100).toFixed(1)+'%':'—'}</td>
-                <td><div class="record-actions">
-                  <button class="btn btn-sm btn-secondary" onclick="editLoss(${r.id})">Edit</button>
-                  <button class="btn btn-sm btn-danger" onclick="deleteLoss(${r.id})">Delete</button>
-                </div></td>
-              </tr>`;
-            }).join('') : '<tr><td colspan="8"><div class="empty"><p>No records yet.</p></div></td></tr>'}
+            <tr>
+              <td style="padding:10px 12px;border-bottom:1px solid var(--gray-100);font-weight:600;color:var(--amber)">Runrate Loss %</td>
+              <td style="padding:10px 12px;border-bottom:1px solid var(--gray-100);font-family:monospace">1 − (Actual Output ÷ Capacity)</td>
+              <td style="padding:10px 12px;border-bottom:1px solid var(--gray-100);color:var(--gray-500)">Runrate Efficiency entry</td>
+            </tr>
+            <tr>
+              <td style="padding:10px 12px;border-bottom:1px solid var(--gray-100);font-weight:600;color:var(--red)">Absenteeism Loss %</td>
+              <td style="padding:10px 12px;border-bottom:1px solid var(--gray-100);font-family:monospace">Absences ÷ (Working Days × Manpower)</td>
+              <td style="padding:10px 12px;border-bottom:1px solid var(--gray-100);color:var(--gray-500)">Manhours entry</td>
+            </tr>
+            <tr>
+              <td style="padding:10px 12px;font-weight:600;color:var(--blue)">Manhours Loss %</td>
+              <td style="padding:10px 12px;font-family:monospace">1 − (Actual MH ÷ Planned MH)</td>
+              <td style="padding:10px 12px;color:var(--gray-500)">Manhours entry</td>
+            </tr>
           </tbody>
         </table>
+      </div>
+      <div style="margin-top:8px;padding-top:20px;border-top:1px solid var(--gray-200)">
+        <p style="font-size:13px;color:var(--gray-500);margin-bottom:12px">
+          The <strong>% Contribution Factor</strong> per line is: each loss % ÷ sum of all three loss % for that line.
+        </p>
+        <div style="display:flex;gap:10px">
+          <button class="btn btn-primary" onclick="navigateTo('loss')">View Loss Dashboard</button>
+          <button class="btn btn-secondary" onclick="navigateTo('entry-capacity')">Go to Runrate Entry</button>
+          <button class="btn btn-secondary" onclick="navigateTo('entry-manhours')">Go to Manhours Entry</button>
+        </div>
       </div>
     </div>
   `;
 }
-function saveLoss(){
-  const month=val('l_month'), line=val('l_line').trim();
-  const runVal=parseN('l_run'), abs=parseN('l_abs'), mh=parseN('l_mh');
-  if(!month){showToast('Month is required','error');return;}
-  run(`INSERT INTO loss (month,line,runrate_loss,absenteeism_loss,manhours_loss) VALUES (?,?,?,?,?)
-    ON CONFLICT(month,line) DO UPDATE SET runrate_loss=excluded.runrate_loss,absenteeism_loss=excluded.absenteeism_loss,manhours_loss=excluded.manhours_loss`,
-    [month, line||'', runVal, abs, mh]);  // always string, never null
-  showToast('Loss record saved!');navigateTo('entry-loss');
-}
-function editLoss(id){
-  const r=query(`SELECT * FROM loss WHERE id=?`,[id])[0];
-  if(!r)return;
-  setVal('l_month',r.month);setVal('l_line',r.line||'');setVal('l_run',r.runrate_loss);setVal('l_abs',r.absenteeism_loss);setVal('l_mh',r.manhours_loss);
-}
-function deleteLoss(id){if(!confirm('Delete?'))return;run(`DELETE FROM loss WHERE id=?`,[id]);showToast('Deleted.','error');navigateTo('entry-loss');}
+// Stub functions kept so any existing saved references or imports don't throw errors
+function saveLoss(){}
+function editLoss(){}
+function deleteLoss(){}
  
 // ── ENTRY: BUDGET ──────────────────────────────────────────────────────────────
 function renderEntryBudget(c) {

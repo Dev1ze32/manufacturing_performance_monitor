@@ -25,6 +25,7 @@ window.navigateTo = function(page) {
   document.querySelectorAll('[id^="page-"]').forEach(el => el.style.display = 'none');
   document.getElementById('page-' + page).style.display = '';
   currentPage = page;
+  populateMonthFilter(page);  // refresh picker to show only months relevant to this page
   renderCurrentPage();
 };
 
@@ -33,6 +34,8 @@ window.onGlobalMonthChange = function() {
 };
 
 function renderCurrentPage() {
+  // For manhours, apply the special runrate fallback; all others just use the current selection
+  // (already validated/adjusted by populateMonthFilter when page changed)
   const m = currentPage === 'manhours' ? resolveRunrateManhoursMonth(getGlobalMonth()) : getGlobalMonth();
   const container = document.getElementById('page-' + currentPage);
   
@@ -48,7 +51,6 @@ function renderCurrentPage() {
     case 'entry-production': Forms.renderEntryProduction(container); break;
     case 'entry-capacity': Forms.renderEntryCapacity(container); break;
     case 'entry-manhours': Forms.renderEntryManhours(container); break;
-    case 'entry-loss': Forms.renderEntryLoss(container); break;
     case 'entry-budget': Forms.renderEntryBudget(container); break;
   }
 }
@@ -93,7 +95,7 @@ window.clearExistingRecords = function(table, label) {
     return;
   }
 
-  populateMonthFilter();
+  populateMonthFilter(currentPage);
   showToast(`${label} cleared.`, 'error');
   renderCurrentPage();
 };
@@ -112,7 +114,7 @@ Object.entries(Importer).forEach(([name, func]) => {
 // Boot Application
 window.addEventListener('DOMContentLoaded', () => {
   initDB().then(() => {
-    populateMonthFilter();
+    populateMonthFilter(currentPage);
     renderCurrentPage();
   });
 });
