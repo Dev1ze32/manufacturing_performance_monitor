@@ -1071,45 +1071,94 @@ function renderManhours(c, month) {
  
 // ── LOSS DASHBOARD ─────────────────────────────────────────────────────────────
 function renderLoss(c, month) {
-  const mLabel = month ? fmtMonthLabel(month) : 'All Months';
+  const selectedMonth = month || '';
+  const fiscalQuarter = isoMonth => {
+    if (!isoMonth) return null;
+    const [year, mo] = String(isoMonth).split('-').map(Number);
+    if (!year || !mo) return null;
+    if (mo >= 10) return { q: 1, fy: year + 1 };
+    if (mo <= 3) return { q: 2, fy: year };
+    if (mo <= 6) return { q: 3, fy: year };
+    return { q: 4, fy: year };
+  };
+  const sameFiscalQuarter = (a, b) => {
+    const qa = fiscalQuarter(a);
+    const qb = fiscalQuarter(b);
+    return !!qa && !!qb && qa.q === qb.q && qa.fy === qb.fy;
+  };
+  const quarterLabel = isoMonth => {
+    const q = fiscalQuarter(isoMonth);
+    return q ? `FY${q.fy} Q${q.q}` : fmtMonthLabel(isoMonth);
+  };
 
   // ── Pull raw data ─────────────────────────────────────────────────────────────
-  const rrRows = getRunrateSummaryRows(month);   // {month, line, capacity, actual_output}
-  const mhRows = getManhoursSummaryRows(month);  // {month, line, working_days, manpower, planned_reg, actual_reg, planned_ot, actual_ot, absenteeism}
-  const mhMap  = new Map(mhRows.map(r => [`${r.month}|${r.line}`, r]));
+  const allRunrateRows = getRunrateSummaryRows('');
+  const allManhoursRows = getManhoursSummaryRows('');
+  const inSelectedPeriod = row => !selectedMonth || sameFiscalQuarter(row.month, selectedMonth);
+  const rrRows = allRunrateRows.filter(inSelectedPeriod);
+  const mhRows = allManhoursRows.filter(inSelectedPeriod);
+  const periodMonths = [...new Set([...rrRows, ...mhRows].map(r => r.month).filter(Boolean))].sort();
+  const mLabel = selectedMonth ? quarterLabel(selectedMonth) : 'All Months';
+  const periodLabel = selectedMonth && periodMonths.length
+    ? `${mLabel} (${periodMonths.map(fmtMonthLabel).join(', ')})`
+    : mLabel;
 
-  // ── Per-month-line rows (for the detail table) ────────────────────────────────
-  const keySet = new Set([
-    ...rrRows.map(r => `${r.month}|${r.line}`),
-    ...mhRows.map(r => `${r.month}|${r.line}`)
-  ]);
+  // ── Per-line rows for the selected period ─────────────────────────────────────
+  const lineBuckets = new Map();
+  const getBucket = line => {
+    const label = line || 'Plant-wide';
+    if (!lineBuckets.has(label)) {
+      lineBuckets.set(label, {
+        line: label,
+        months: new Set(),
+        _rrCap: 0,
+        _rrAct: 0,
+        _personDays: 0,
+        _absDays: 0,
+        _plannedMH: 0,
+        _actualMH: 0
+      });
+    }
+    return lineBuckets.get(label);
+  };
 
-  const rows = [...keySet].sort().map(key => {
-    const [m, line] = key.split('|');
-    const rr = rrRows.find(r => r.month === m && r.line === line) || {};
-    const mh = mhMap.get(key) || {};
-
-    const runrateLoss = (rr.capacity > 0) ? 1 - (rr.actual_output / rr.capacity) : null;
-
-    const personDays = (mh.working_days > 0 && mh.manpower > 0) ? mh.working_days * mh.manpower : null;
-    const absLoss = (personDays && mh.absenteeism != null) ? mh.absenteeism / personDays : null;
-
-    const plannedMH = (mh.planned_reg || 0) + (mh.planned_ot || 0);
-    const actualMH  = (mh.actual_reg  || 0) + (mh.actual_ot  || 0);
-    const mhLoss = (plannedMH > 0) ? 1 - (actualMH / plannedMH) : null;
-
-    const rowTotal = (runrateLoss || 0) + (absLoss || 0) + (mhLoss || 0);
-    return {
-      month: m, line, runrateLoss, absLoss, mhLoss, total: rowTotal,
-      runPct: rowTotal > 0 && runrateLoss != null ? runrateLoss / rowTotal : null,
-      absPct: rowTotal > 0 && absLoss     != null ? absLoss     / rowTotal : null,
-      mhPct:  rowTotal > 0 && mhLoss      != null ? mhLoss      / rowTotal : null,
-      // keep raw components for aggregation
-      _rrCap: rr.capacity || 0, _rrAct: rr.actual_output || 0,
-      _personDays: personDays || 0, _absDays: mh.absenteeism || 0,
-      _plannedMH: plannedMH, _actualMH: actualMH
-    };
+  rrRows.forEach(r => {
+    const bucket = getBucket(r.line);
+    if (r.month) bucket.months.add(r.month);
+    bucket._rrCap += r.capacity || 0;
+    bucket._rrAct += r.actual_output || 0;
   });
+
+  mhRows.forEach(r => {
+    const bucket = getBucket(r.line);
+    if (r.month) bucket.months.add(r.month);
+    bucket._personDays += r.person_days ?? calcPersonDays(r.working_days, r.manpower) ?? 0;
+    bucket._absDays += r.absenteeism || 0;
+    bucket._plannedMH += (r.planned_reg || 0) + (r.planned_ot || 0);
+    bucket._actualMH += (r.actual_reg || 0) + (r.actual_ot || 0);
+  });
+
+  const rows = [...lineBuckets.values()]
+    .sort((a, b) => String(a.line).localeCompare(String(b.line)))
+    .map(bucket => {
+      const runrateLoss = bucket._rrCap > 0 ? 1 - (bucket._rrAct / bucket._rrCap) : null;
+      const absLoss = bucket._personDays > 0 ? bucket._absDays / bucket._personDays : null;
+      const mhLoss = bucket._plannedMH > 0 ? 1 - (bucket._actualMH / bucket._plannedMH) : null;
+      const rowTotal = (runrateLoss || 0) + (absLoss || 0) + (mhLoss || 0);
+
+      return {
+        ...bucket,
+        period: mLabel,
+        monthList: [...bucket.months].sort().map(fmtMonthLabel).join(', '),
+        runrateLoss,
+        absLoss,
+        mhLoss,
+        total: rowTotal,
+        runPct: rowTotal > 0 && runrateLoss != null ? runrateLoss / rowTotal : null,
+        absPct: rowTotal > 0 && absLoss != null ? absLoss / rowTotal : null,
+        mhPct: rowTotal > 0 && mhLoss != null ? mhLoss / rowTotal : null
+      };
+    });
 
   // ── Aggregate for KPI cards & chart ──────────────────────────────────────────
   // Match Excel's approach: aggregate raw totals first, THEN compute loss rate.
@@ -1144,7 +1193,7 @@ function renderLoss(c, month) {
   c.innerHTML = `
     <div class="page-header">
       <h1>Loss Analysis</h1>
-      <p>Derived from Runrate Efficiency &amp; Manhours data — <strong>${mLabel}</strong></p>
+      <p>Derived from Runrate Efficiency &amp; Manhours data — <strong>${periodLabel}</strong></p>
     </div>
     <div class="info-block" style="margin-bottom:20px">
       <strong>Fully derived.</strong>
@@ -1227,13 +1276,13 @@ function renderLoss(c, month) {
     <div class="card">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
         <div class="card-title">Loss by Line — ${mLabel}</div>
-        ${!month ? '<div style="font-size:11px;color:var(--gray-400)">Select a month in the sidebar to filter by period</div>' : ''}
+        ${!selectedMonth ? '<div style="font-size:11px;color:var(--gray-400)">Select a month in the sidebar to view its fiscal quarter</div>' : ''}
       </div>
       <div class="table-wrap">
         <table>
           <thead>
             <tr>
-              <th>Month</th><th>Line</th>
+              <th>Period</th><th>Line</th>
               <th class="td-number">Runrate Loss %</th>
               <th class="td-number">Absence Loss %</th>
               <th class="td-number">Manhours Loss %</th>
@@ -1244,7 +1293,7 @@ function renderLoss(c, month) {
           </thead>
           <tbody>
             ${hasData ? rows.map(r => `<tr>
-              <td>${fmtMonthLabel(r.month)}</td>
+              <td title="${r.monthList}">${r.period}</td>
               <td><strong>${r.line || '—'}</strong></td>
               <td class="td-number">${r.runrateLoss != null ? (r.runrateLoss*100).toFixed(2)+'%' : '—'}</td>
               <td class="td-number">${r.absLoss    != null ? (r.absLoss*100).toFixed(2)+'%'     : '—'}</td>
