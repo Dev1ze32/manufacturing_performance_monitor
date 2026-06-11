@@ -2,10 +2,13 @@ import { initDB } from './database.js';
 import { clearEntryTable, deleteRecordByMonth } from './queries/appQueries.js';
 import {
   getGlobalMonth,
+  getGlobalQuarter,
   setGlobalMonth,
+  clearGlobalSelection,
   getFY,
   renderPeriodPicker,
   populateMonthFilter,
+  pageSupportsQuarters,
   showToast,
   clearForm,
   fmtMonthLabel,
@@ -20,9 +23,8 @@ let currentPage = 'executive';
 
 function setSidebarOpen(isOpen) {
   const sidebar = document.getElementById('sidebar');
-  const toggle = document.getElementById('sidebarToggle');
+  const toggle  = document.getElementById('sidebarToggle');
   if (!sidebar || !toggle) return;
-
   sidebar.classList.toggle('open', isOpen);
   document.body.classList.toggle('sidebar-open', isOpen);
   toggle.setAttribute('aria-expanded', String(isOpen));
@@ -30,25 +32,14 @@ function setSidebarOpen(isOpen) {
 }
 
 function initResponsiveNavigation() {
-  const toggle = document.getElementById('sidebarToggle');
+  const toggle   = document.getElementById('sidebarToggle');
   const backdrop = document.getElementById('sidebarBackdrop');
-
-  toggle?.addEventListener('click', () => {
-    setSidebarOpen(!document.body.classList.contains('sidebar-open'));
-  });
-
+  toggle?.addEventListener('click', () => setSidebarOpen(!document.body.classList.contains('sidebar-open')));
   backdrop?.addEventListener('click', () => setSidebarOpen(false));
-
-  document.addEventListener('keydown', event => {
-    if (event.key === 'Escape') setSidebarOpen(false);
-  });
-
-  window.addEventListener('resize', () => {
-    if (window.innerWidth > 1024) setSidebarOpen(false);
-  });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') setSidebarOpen(false); });
+  window.addEventListener('resize', () => { if (window.innerWidth > 1024) setSidebarOpen(false); });
 }
 
-// Attach Navigation to the global scope for the HTML 'onclick' attributes
 window.navigateTo = function(page) {
   if (page === 'entry-production') page = 'entry-utilities';
   document.querySelectorAll('.nav-item').forEach(el => {
@@ -57,7 +48,7 @@ window.navigateTo = function(page) {
   document.querySelectorAll('[id^="page-"]').forEach(el => el.style.display = 'none');
   document.getElementById('page-' + page).style.display = '';
   currentPage = page;
-  populateMonthFilter(page);  // refresh picker to show only months relevant to this page
+  populateMonthFilter(page);  // handles quarter→month conversion when switching pages
   if (window.innerWidth <= 1024) setSidebarOpen(false);
   renderCurrentPage();
 };
@@ -67,67 +58,56 @@ window.onGlobalMonthChange = function() {
 };
 
 function renderCurrentPage() {
-  // For manhours, apply the special runrate fallback; all others just use the current selection
-  // (already validated/adjusted by populateMonthFilter when page changed)
-  const m = currentPage === 'manhours' ? resolveRunrateManhoursMonth(getGlobalMonth()) : getGlobalMonth();
+  const month   = getGlobalMonth();
+  const quarter = getGlobalQuarter();
   const container = document.getElementById('page-' + currentPage);
-  
-  switch(currentPage) {
-    case 'executive': Dashboards.renderExecutive(container, m); break;
-    case 'cost': Dashboards.renderCost(container, m); break;
-    case 'production': Dashboards.renderProduction(container, m); break;
-    case 'manhours': Dashboards.renderManhours(container, m); break;
-    case 'loss': Dashboards.renderLoss(container, m); break;
-    case 'budget': Dashboards.renderBudget(container, m); break;
-    case 'import': Importer.renderImport(container); break;
+
+  const resolvedMonth = currentPage === 'manhours'
+    ? resolveRunrateManhoursMonth(month)
+    : month;
+
+  switch (currentPage) {
+    case 'executive':       Dashboards.renderExecutive(container, resolvedMonth); break;
+    case 'cost':            Dashboards.renderCost(container, resolvedMonth); break;
+    case 'production':      Dashboards.renderProduction(container, resolvedMonth); break;
+    // manhours and loss both receive quarter so they can aggregate across months
+    case 'manhours':        Dashboards.renderManhours(container, resolvedMonth, quarter); break;
+    case 'loss':            Dashboards.renderLoss(container, resolvedMonth, quarter); break;
+    case 'budget':          Dashboards.renderBudget(container, resolvedMonth); break;
+    case 'import':          Importer.renderImport(container); break;
     case 'entry-utilities': Forms.renderEntryUtilities(container); break;
-    case 'entry-production': Forms.renderEntryProduction(container); break;
-    case 'entry-capacity': Forms.renderEntryCapacity(container); break;
-    case 'entry-manhours': Forms.renderEntryManhours(container); break;
-    case 'entry-budget': Forms.renderEntryBudget(container); break;
+    case 'entry-production':Forms.renderEntryProduction(container); break;
+    case 'entry-capacity':  Forms.renderEntryCapacity(container); break;
+    case 'entry-manhours':  Forms.renderEntryManhours(container); break;
+    case 'entry-budget':    Forms.renderEntryBudget(container); break;
   }
 }
 
 function resolveRunrateManhoursMonth(selectedMonth) {
   if (!selectedMonth) return '';
-
-  const runrateMonths = getRunrateSummaryRows('').map(r => r.month).filter(Boolean);
+  const runrateMonths  = getRunrateSummaryRows('').map(r => r.month).filter(Boolean);
   const manhoursMonths = getManhoursSummaryRows('').map(r => r.month).filter(Boolean);
-  const availableMonths = [...new Set([...runrateMonths, ...manhoursMonths])].sort();
-
-  if (!availableMonths.length || availableMonths.includes(selectedMonth)) return selectedMonth;
-
-  // Selected month has no data — fall back to latest available and update the picker
-  const fallbackMonth = availableMonths[availableMonths.length - 1];
-  setGlobalMonth(fallbackMonth);
-  renderPeriodPicker(getFY(fallbackMonth), fallbackMonth);
-  return fallbackMonth;
+  const available      = [...new Set([...runrateMonths, ...manhoursMonths])].sort();
+  if (!available.length || available.includes(selectedMonth)) return selectedMonth;
+  const fallback = available[available.length - 1];
+  setGlobalMonth(fallback);
+  renderPeriodPicker(getFY(fallback), fallback, null, window._currentPickerMonths, true);
+  return fallback;
 }
 
-// Global Generic Delete (Used by the forms)
 window.deleteRecord = function(table, month) {
-  if(!confirm(`Delete record for ${fmtMonthLabel(month)}?`)) return;
+  if (!confirm(`Delete record for ${fmtMonthLabel(month)}?`)) return;
   deleteRecordByMonth(table, month);
   showToast('Deleted.', 'error');
   renderCurrentPage();
 };
 
-const clearableEntryTables = new Set(['utilities', 'production', 'capacity', 'manhours', 'loss', 'budget']);
+const clearableEntryTables = new Set(['utilities','production','capacity','manhours','loss','budget']);
 
 window.clearExistingRecords = function(table, label) {
-  if(!clearableEntryTables.has(table)) {
-    showToast('Cannot clear this record set.', 'error');
-    return;
-  }
-
-  if(!confirm(`Clear all ${label}? This will delete every existing record in this section.`)) return;
-
-  const cleared = clearEntryTable(table);
-  if(!cleared) {
-    showToast(`Could not clear ${label}.`, 'error');
-    return;
-  }
-
+  if (!clearableEntryTables.has(table)) { showToast('Cannot clear this record set.', 'error'); return; }
+  if (!confirm(`Clear all ${label}? This will delete every existing record in this section.`)) return;
+  if (!clearEntryTable(table)) { showToast(`Could not clear ${label}.`, 'error'); return; }
   populateMonthFilter(currentPage);
   showToast(`${label} cleared.`, 'error');
   renderCurrentPage();
@@ -135,16 +115,9 @@ window.clearExistingRecords = function(table, label) {
 
 window.clearForm = clearForm;
 
-// Map form handlers to the window object so inline HTML functions keep working seamlessly
-Object.entries(Forms).forEach(([name, func]) => {
-  window[name] = func;
-});
+Object.entries(Forms).forEach(([name, func]) => { window[name] = func; });
+Object.entries(Importer).forEach(([name, func]) => { window[name] = func; });
 
-Object.entries(Importer).forEach(([name, func]) => {
-  window[name] = func;
-});
-
-// Boot Application
 window.addEventListener('DOMContentLoaded', () => {
   initResponsiveNavigation();
   initDB().then(() => {

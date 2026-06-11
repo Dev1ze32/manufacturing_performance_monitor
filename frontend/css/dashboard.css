@@ -196,6 +196,45 @@ button, input, select { font: inherit; }
   color: #fff;
   letter-spacing: 0.03em;
 }
+
+.period-quarters {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+  padding-bottom: 6px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid rgba(255,255,255,0.07);
+}
+ 
+.period-quarter {
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.15);
+  color: rgba(255,255,255,0.6);
+  border-radius: 5px;
+  padding: 5px 2px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  text-align: center;
+  line-height: 1;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+ 
+.period-quarter:hover {
+  background: rgba(255,255,255,0.13);
+  color: #fff;
+  border-color: rgba(255,255,255,0.3);
+}
+ 
+/* Teal to distinguish from blue month buttons */
+.period-quarter.selected {
+  background: var(--teal) !important;
+  border-color: #14b8a6 !important;
+  color: #fff !important;
+}
+ 
 .period-nav {
   background: rgba(255,255,255,0.1);
   border: none;
@@ -318,6 +357,12 @@ button, input, select { font: inherit; }
   text-transform: uppercase;
   letter-spacing: 0.07em;
   margin-bottom: 4px;
+}
+.card-subtitle {
+  font-size: 12px;
+  color: var(--gray-400);
+  line-height: 1.4;
+  margin-top: 4px;
 }
 .records-header {
   display: flex;
@@ -443,6 +488,164 @@ tbody tr:hover td { background: var(--blue-light) !important; }
 .td-green { color: var(--green); }
 .td-red   { color: var(--red);   }
 .td-amber { color: var(--amber); }
+
+/* Runrate & Manhours dashboard */
+.runrate-overview {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+}
+.overview-stat {
+  min-width: 0;
+  background: var(--white);
+  border: 1px solid var(--gray-200);
+  border-left: 3px solid var(--gray-300);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  padding: 14px 16px;
+}
+.overview-stat.stat-good { border-left-color: var(--teal); background: linear-gradient(90deg, rgba(240,253,250,0.9), #fff 42%); }
+.overview-stat.stat-watch { border-left-color: var(--amber); background: linear-gradient(90deg, rgba(255,251,235,0.9), #fff 42%); }
+.overview-stat.stat-bad { border-left-color: var(--red); background: linear-gradient(90deg, rgba(254,242,242,0.9), #fff 42%); }
+.overview-stat.stat-neutral { border-left-color: var(--gray-300); }
+.overview-label {
+  font-size: 10px;
+  font-weight: 800;
+  color: var(--gray-400);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+.overview-value {
+  color: var(--gray-900);
+  font-size: 20px;
+  font-weight: 750;
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.overview-sub {
+  color: var(--gray-400);
+  font-size: 11px;
+  line-height: 1.35;
+  margin-top: 6px;
+}
+.runrate-focus-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+.runrate-focus-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  max-width: 64%;
+}
+.focus-tab {
+  border: 1px solid var(--gray-200);
+  border-radius: 6px;
+  background: var(--white);
+  color: var(--gray-600);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.1;
+  padding: 7px 10px;
+  transition: background 0.13s, border-color 0.13s, color 0.13s;
+}
+.focus-tab:hover { background: var(--gray-50); color: var(--gray-900); }
+.focus-tab.active {
+  background: var(--gray-900);
+  border-color: var(--gray-900);
+  color: #fff;
+}
+.chart-container-lg { height: clamp(300px, 34vw, 420px); }
+.detail-disclosure {
+  background: rgba(255,255,255,0.72);
+  border: 1px solid var(--gray-200);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+.detail-disclosure > summary {
+  align-items: center;
+  color: var(--gray-700);
+  cursor: pointer;
+  display: flex;
+  font-size: 12px;
+  font-weight: 800;
+  gap: 12px;
+  justify-content: space-between;
+  letter-spacing: 0.07em;
+  list-style: none;
+  padding: 14px 16px;
+  text-transform: uppercase;
+}
+.detail-disclosure > summary::-webkit-details-marker { display: none; }
+.detail-disclosure > summary::after {
+  align-items: center;
+  background: var(--gray-100);
+  border: 1px solid var(--gray-200);
+  border-radius: 6px;
+  color: var(--gray-500);
+  content: '+';
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: 16px;
+  font-weight: 700;
+  height: 26px;
+  justify-content: center;
+  line-height: 1;
+  width: 26px;
+}
+.detail-disclosure[open] > summary::after { content: '-'; }
+.detail-disclosure > summary small {
+  color: var(--gray-400);
+  flex: 1;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-align: right;
+  text-transform: none;
+}
+.detail-disclosure > .card { margin: 0 14px 14px; }
+
+/* OB vs Actual FY summary */
+.budget-summary-head {
+  align-items: flex-start;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+.budget-summary-head .pill { flex: 0 0 auto; }
+.budget-summary-table table {
+  min-width: 640px;
+}
+.budget-summary-table tbody tr:last-child td {
+  background: var(--gray-50);
+  border-top: 2px solid var(--gray-200);
+}
+.budget-summary-table tbody tr:last-child td:first-child {
+  color: var(--blue);
+}
+
+/* Cost dashboard adaptive trend */
+.cost-trend-head {
+  align-items: flex-start;
+  display: flex;
+  gap: 14px;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+.cost-trend-controls {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+}
 
 /* ─────────────────────────────────────────────
    FORMS
@@ -767,6 +970,7 @@ tbody tr:hover td { background: var(--blue-light) !important; }
 @media (max-width: 1280px) {
   .main { padding: 22px 22px 40px; }
   .metrics-grid { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
+  .runrate-overview { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .metric-value { font-size: 25px; }
 }
 
@@ -791,6 +995,15 @@ tbody tr:hover td { background: var(--blue-light) !important; }
   .main { padding: 68px 14px 20px; }
   .metrics-grid,
   .import-stats { grid-template-columns: repeat(auto-fill, minmax(min(150px, 100%), 1fr)); gap: 10px; }
+  .runrate-overview { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .runrate-focus-head { flex-direction: column; }
+  .runrate-focus-tabs { justify-content: flex-start; max-width: none; }
+  .chart-container-lg { height: 280px; }
+  .detail-disclosure > summary { align-items: flex-start; }
+  .detail-disclosure > summary small { text-align: left; }
+  .budget-summary-head { flex-direction: column; }
+  .cost-trend-head { flex-direction: column; }
+  .cost-trend-controls { flex-wrap: wrap; }
   .metric-card, .import-stat { padding: 14px 16px; }
   .metric-label { font-size: 10px; }
   .metric-value { font-size: 22px; }
@@ -837,5 +1050,7 @@ tbody tr:hover td { background: var(--blue-light) !important; }
   .card, .metric-card { padding: 12px; }
   .metric-value { font-size: 20px; }
   .chart-container { height: 220px; }
+  .runrate-overview { grid-template-columns: 1fr; }
+  .chart-container-lg { height: 240px; }
   .metrics-grid { grid-template-columns: 1fr; }
 }

@@ -52,7 +52,7 @@ export function getExecutiveCostTrendRows() {
 export function getCostDashboardRows() {
   return query(`SELECT u.month, u.utility_cost, u.rm_cost, p.volume
     FROM utilities u LEFT JOIN production p ON u.month = p.month
-    ORDER BY u.month DESC LIMIT 24`).reverse();
+    ORDER BY u.month ASC`);
 }
 
 export function getProductionCapacityRows(month) {

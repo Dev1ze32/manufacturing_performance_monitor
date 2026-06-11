@@ -83,18 +83,3 @@ export function upsertImportedManhours(record) {
   if (saved) run('DELETE FROM manhours_weekly WHERE month = ? AND line = ?', [record.month, record.line || '']);
   return saved;
 }
-
-export function upsertImportedLoss(record) {
-  return run(`INSERT INTO loss (month, line, runrate_loss, absenteeism_loss, manhours_loss) VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT(month, line) DO UPDATE SET
-        runrate_loss = COALESCE(excluded.runrate_loss, loss.runrate_loss),
-        absenteeism_loss = COALESCE(excluded.absenteeism_loss, loss.absenteeism_loss),
-        manhours_loss = COALESCE(excluded.manhours_loss, loss.manhours_loss)`,
-    [
-      record.month,
-      record.line || '',
-      record.runrate_loss,
-      record.absenteeism_loss,
-      record.manhours_loss
-    ]);
-}

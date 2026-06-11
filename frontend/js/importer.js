@@ -1,7 +1,6 @@
 import {
   upsertImportedBudget,
   upsertImportedCapacity,
-  upsertImportedLoss,
   upsertImportedManhours,
   upsertImportedProduction,
   upsertImportedUtility,
@@ -145,13 +144,12 @@ function createParsedData() {
     budget: new Map(),
     capacity: new Map(),
     capacity_weekly: new Map(),
-    manhours: new Map(),
-    loss: new Map()
+    manhours: new Map()
   };
 }
 
 function createTotals() {
-  return { utilities: 0, production: 0, budget: 0, capacity: 0, capacity_weekly: 0, manhours: 0, loss: 0 };
+  return { utilities: 0, production: 0, budget: 0, capacity: 0, capacity_weekly: 0, manhours: 0 };
 }
 
 function parsePeriodMetricSheet(sheet, parsed) {
@@ -232,9 +230,6 @@ function parseOperationalSheet(sheet, parsed, defaultFy) {
         parseManhoursBlock(sheet, parsed, defaultFy, r, c, range, normalizeLineName(text));
       }
 
-      if (/^Q\d\b/i.test(text) && /\bL\d\b/i.test(text) && !/MANHOURS|EFFICIENCY/i.test(text)) {
-        parseLossBlock(sheet, parsed, defaultFy, r, c, range, normalizeLineName(text), text);
-      }
     }
   }
 }
@@ -293,7 +288,8 @@ function parseCapacityBlock(sheet, parsed, defaultFy, headingRow, startCol, rang
   }, -1);
 
   weeklyRecords.forEach((record, index) => {
-    if (record.capacity === 0 && record.actual_output === 0 && (lastNonZeroIndex < 0 || index > lastNonZeroIndex)) return;
+    const isZeroWeek = (record.capacity == null || record.capacity === 0) && (record.actual_output == null || record.actual_output === 0);
+    if (isZeroWeek && lastNonZeroIndex >= 0 && index > lastNonZeroIndex) return;
     upsertMap(
       parsed.capacity_weekly,
       keyed(record.month, record.line) + '::' + record.week_label,
@@ -345,31 +341,6 @@ function parseManhoursBlock(sheet, parsed, defaultFy, headingRow, startCol, rang
     if (hasAnyNumber(record, ['planned_reg', 'actual_reg', 'planned_ot', 'actual_ot', 'absenteeism', 'working_days', 'manpower'])) {
       upsertMap(parsed.manhours, keyed(month, line), record);
     }
-  }
-}
-
-function parseLossBlock(sheet, parsed, defaultFy, headingRow, startCol, range, line, headingText) {
-  if (!line) return;
-
-  const quarter = Number((headingText.match(/^Q(\d)/i) || [])[1]);
-  const month = quarterToFiscalEndMonth(quarter, defaultFy);
-  if (!month) return;
-
-  const record = { month, line };
-  const endRow = Math.min(range.e.r, headingRow + 5);
-
-  for (let r = headingRow + 1; r <= endRow; r++) {
-    const label = cleanText(getCellValue(sheet, r, startCol));
-    const value = toNumber(getCellValue(sheet, r, startCol + 1));
-    if (value == null) continue;
-
-    if (/RUNRATE/i.test(label)) record.runrate_loss = normalizePercent(value);
-    if (/ABSENTEEISM/i.test(label)) record.absenteeism_loss = normalizePercent(value);
-    if (/MANHOURS/i.test(label)) record.manhours_loss = normalizePercent(value);
-  }
-
-  if (hasAnyNumber(record, ['runrate_loss', 'absenteeism_loss', 'manhours_loss'])) {
-    upsertMap(parsed.loss, keyed(month, line), record);
   }
 }
 
@@ -434,17 +405,6 @@ function applyParsedData(parsed) {
     })) {
       totals.manhours++;
     }
-  });
-
-  parsed.loss.forEach(r => {
-    if (isAllZeroOrNull(r, ['runrate_loss', 'absenteeism_loss', 'manhours_loss'])) return;
-    if (upsertImportedLoss({
-      month: r.month,
-      line: r.line || '',
-      runrate_loss: nullIfMissing(r.runrate_loss),
-      absenteeism_loss: nullIfMissing(r.absenteeism_loss),
-      manhours_loss: nullIfMissing(r.manhours_loss)
-    })) totals.loss++;
   });
 
   return totals;
@@ -540,12 +500,6 @@ function monthNameToIso(monthName, fiscalYear) {
   return isoMonth(year, monthNo);
 }
 
-function quarterToFiscalEndMonth(quarter, fiscalYear) {
-  const fiscalQuarterEnd = { 1: [fiscalYear - 1, 12], 2: [fiscalYear, 3], 3: [fiscalYear, 6], 4: [fiscalYear, 9] };
-  const end = fiscalQuarterEnd[quarter];
-  return end ? isoMonth(end[0], end[1]) : '';
-}
-
 function normalizeYear(value) {
   const year = Number(value);
   return year < 100 ? 2000 + year : year;
@@ -599,8 +553,7 @@ function renderImportSummary(fileSummaries, totals) {
     ['OB / Target', totals.budget],
     ['Runrate Monthly', totals.capacity],
     ['Runrate Weekly', totals.capacity_weekly],
-    ['Manhours (Monthly)', totals.manhours],
-    ['Loss', totals.loss]
+    ['Manhours (Monthly)', totals.manhours]
   ].map(([label, value]) => `
     <div class="import-stat">
       <div class="metric-label">${label}</div>
@@ -634,7 +587,7 @@ function collectMonths(parsed) {
   ['utilities', 'production', 'budget'].forEach(key => {
     parsed[key].forEach((_, month) => months.add(month));
   });
-  ['capacity', 'capacity_weekly', 'manhours', 'loss'].forEach(key => {
+  ['capacity', 'capacity_weekly', 'manhours'].forEach(key => {
     parsed[key].forEach(record => months.add(record.month));
   });
   return [...months].filter(Boolean).sort();

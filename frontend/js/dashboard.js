@@ -468,6 +468,29 @@ function renderCost(c, month) {
     const [y, mo] = m.split('-').map(Number);
     return `${y - 1}-${String(mo).padStart(2, '0')}`;
   };
+  const costTrendWindows = new Set(['12', 'fy', 'all']);
+  const storedTrendWindow = window.localStorage?.getItem('costTrendWindow') || '12';
+  const trendWindow = costTrendWindows.has(storedTrendWindow) ? storedTrendWindow : '12';
+  const latestCostMonth = rows.length ? rows[rows.length - 1].month : '';
+  const trendBaseMonth = month || latestCostMonth;
+  const trendFY = trendBaseMonth ? getFY(trendBaseMonth) : null;
+  const trendFYMonths = trendFY ? getFYMonths(trendFY) : [];
+  const trendRows = (() => {
+    if (trendWindow === 'all') return rows;
+    if (trendWindow === 'fy' && trendFYMonths.length) {
+      const endIdx = Math.max(trendFYMonths.indexOf(trendBaseMonth), 0);
+      const visibleMonths = trendFYMonths.slice(0, endIdx + 1);
+      return rows.filter(r => visibleMonths.includes(r.month));
+    }
+    return rows.slice(-12);
+  })();
+  const trendWindowLabel = trendWindow === 'all'
+    ? 'All months'
+    : trendWindow === 'fy'
+      ? (trendFY ? `FY${trendFY} to date` : 'Fiscal year to date')
+      : 'Latest 12 months';
+  const trendHiddenCount = Math.max(rows.length - trendRows.length, 0);
+  const denseCostTrend = trendRows.length > 18;
  
   c.innerHTML = `
     <div class="page-header">
@@ -475,9 +498,19 @@ function renderCost(c, month) {
       <p>Utilities, R&M, and Engineering cost per Kg — ${mLabel}</p>
     </div>
     <div class="card section-gap">
-      <div class="card-title" style="margin-bottom:14px">Cost per Kg — Monthly Trend</div>
+      <div class="cost-trend-head">
+        <div>
+          <div class="card-title">Cost per Kg — Monthly Trend</div>
+          <div class="card-subtitle">${trendWindowLabel}${trendHiddenCount ? ` - ${fmtN(trendHiddenCount,0)} older months hidden from chart` : ''}</div>
+        </div>
+        <div class="cost-trend-controls" aria-label="Cost trend range">
+          <button type="button" class="focus-tab ${trendWindow === '12' ? 'active' : ''}" data-cost-trend-window="12">12M</button>
+          <button type="button" class="focus-tab ${trendWindow === 'fy' ? 'active' : ''}" data-cost-trend-window="fy">FY</button>
+          <button type="button" class="focus-tab ${trendWindow === 'all' ? 'active' : ''}" data-cost-trend-window="all">All</button>
+        </div>
+      </div>
       <div class="chart-container">
-        <canvas id="costChart" aria-label="Monthly cost per kg trend">Cost per kg trend</canvas>
+        ${trendRows.length ? '<canvas id="costChart" aria-label="Monthly cost per kg trend">Cost per kg trend</canvas>' : '<div class="empty"><p>No cost data yet. Enter actual cost and volume first.</p></div>'}
       </div>
     </div>
     <div class="card">
@@ -513,25 +546,36 @@ function renderCost(c, month) {
       </div>
     </div>
   `;
+
+  c.querySelectorAll('[data-cost-trend-window]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      window.localStorage?.setItem('costTrendWindow', btn.dataset.costTrendWindow);
+      renderCost(c, month);
+    });
+  });
  
   destroyChart('costChart');
   const ctx = document.getElementById('costChart');
-  if (ctx && rows.length) {
-    const labels = rows.map(r=>fmtMonthLabel(r.month));
-    const utilPK = rows.map(r=>calcUtilCostPerKg(r.utility_cost,r.volume));
-    const rmPK = rows.map(r=>calcRMCostPerKg(r.rm_cost,r.volume));
-    const enggPK = rows.map(r=>calcEnggCostPerKg(r.utility_cost,r.rm_cost,r.volume));
-    const priorEnggPK = rows.map(r => {
+  if (ctx && trendRows.length) {
+    const labels = trendRows.map(r=>fmtMonthLabel(r.month));
+    const utilPK = trendRows.map(r=>calcUtilCostPerKg(r.utility_cost,r.volume));
+    const rmPK = trendRows.map(r=>calcRMCostPerKg(r.rm_cost,r.volume));
+    const enggPK = trendRows.map(r=>calcEnggCostPerKg(r.utility_cost,r.rm_cost,r.volume));
+    const priorEnggPK = trendRows.map(r => {
       const prior = rowsByMonth[previousYearMonth(r.month)];
       return prior ? calcEnggCostPerKg(prior.utility_cost, prior.rm_cost, prior.volume) : null;
     });
     charts['costChart'] = new Chart(ctx, {
-      type: 'bar',
+      type: denseCostTrend ? 'line' : 'bar',
       data: {
         labels,
         datasets: [
-          { label: 'Util/Kg', data: utilPK, backgroundColor: 'rgba(26,86,219,0.7)' },
-          { label: 'R&M/Kg', data: rmPK, backgroundColor: 'rgba(217,119,6,0.7)' },
+          denseCostTrend
+            ? { label: 'Util/Kg', data: utilPK, borderColor: '#1a56db', backgroundColor: 'rgba(26,86,219,0.08)', pointRadius:2, fill:false, tension:0.25 }
+            : { label: 'Util/Kg', data: utilPK, backgroundColor: 'rgba(26,86,219,0.7)' },
+          denseCostTrend
+            ? { label: 'R&M/Kg', data: rmPK, borderColor: '#d97706', backgroundColor: 'rgba(217,119,6,0.08)', pointRadius:2, fill:false, tension:0.25 }
+            : { label: 'R&M/Kg', data: rmPK, backgroundColor: 'rgba(217,119,6,0.7)' },
           { type: 'line', label: 'Engg/Kg', data: enggPK, borderColor: '#7c3aed', borderDash:[4,3], pointRadius:3, fill:false, tension:0.3 },
           { type: 'line', label: 'Prior Year Engg/Kg', data: priorEnggPK, borderColor: '#64748b', borderDash:[2,4], pointRadius:2, fill:false, tension:0.3 }
         ]
@@ -541,7 +585,7 @@ function renderCost(c, month) {
         plugins: { legend: { labels: { font:{size:11}, boxWidth:10 } } },
         scales: {
           y: { grid:{color:'#f1f5f9'}, ticks:{font:{size:11}}, title:{display:true,text:'₱ / Kg',font:{size:11}} },
-          x: { grid:{display:false}, ticks:{font:{size:11},maxRotation:45,autoSkip:false} }
+          x: { grid:{display:false}, ticks:{font:{size:11},maxRotation:denseCostTrend ? 0 : 45,autoSkip:true,maxTicksLimit:denseCostTrend ? 10 : 14} }
         }
       }
     });
@@ -870,31 +914,44 @@ window.switchWeeklyTab = function(line, btn) {
 };
  
 // ── MANHOURS DASHBOARD ─────────────────────────────────────────────────────────
-function renderManhours(c, month) {
+function renderManhours(c, month, quarter = null) {
   const requestedMonth = month || '';
+  const quarterMonths = quarter ? new Set((quarter.dataMonths || quarter.months || []).filter(Boolean)) : null;
+  const quarterMonthList = quarterMonths ? [...quarterMonths].sort() : [];
   const allSummaryRows = getManhoursSummaryRows('');
   const allRunrateRows = getRunrateSummaryRows('');
   const latestDataMonth = (sourceRows) => {
     const months = [...new Set(sourceRows.map(r => r.month).filter(Boolean))].sort();
     return months.length ? months[months.length - 1] : '';
   };
-  const requestedRunrateRows = requestedMonth ? allRunrateRows.filter(r => r.month === requestedMonth) : allRunrateRows;
-  const requestedManhoursRows = requestedMonth ? allSummaryRows.filter(r => r.month === requestedMonth) : allSummaryRows;
-  const runrateMonth = requestedMonth && !requestedRunrateRows.length ? latestDataMonth(allRunrateRows) : requestedMonth;
-  const manhoursMonth = requestedMonth && !requestedManhoursRows.length ? latestDataMonth(allSummaryRows) : requestedMonth;
-  const runrateRows = runrateMonth ? allRunrateRows.filter(r => r.month === runrateMonth) : allRunrateRows;
-  const rows = manhoursMonth ? allSummaryRows.filter(r => r.month === manhoursMonth) : allSummaryRows;
-  const runrateLabel = runrateMonth ? fmtMonthLabel(runrateMonth) : 'All Months';
-  const manhoursLabel = manhoursMonth ? fmtMonthLabel(manhoursMonth) : 'All Months';
-  const mLabel = runrateLabel === manhoursLabel ? runrateLabel : `Runrate ${runrateLabel} / Manhours ${manhoursLabel}`;
+  const inQuarter = r => !quarterMonths || quarterMonths.has(r.month);
+  const requestedRunrateRows = quarter ? allRunrateRows.filter(inQuarter) : (requestedMonth ? allRunrateRows.filter(r => r.month === requestedMonth) : allRunrateRows);
+  const requestedManhoursRows = quarter ? allSummaryRows.filter(inQuarter) : (requestedMonth ? allSummaryRows.filter(r => r.month === requestedMonth) : allSummaryRows);
+  const runrateMonth = quarter ? '' : (requestedMonth && !requestedRunrateRows.length ? latestDataMonth(allRunrateRows) : requestedMonth);
+  const manhoursMonth = quarter ? '' : (requestedMonth && !requestedManhoursRows.length ? latestDataMonth(allSummaryRows) : requestedMonth);
+  const runrateRows = quarter ? requestedRunrateRows : (runrateMonth ? allRunrateRows.filter(r => r.month === runrateMonth) : allRunrateRows);
+  const rows = quarter ? requestedManhoursRows : (manhoursMonth ? allSummaryRows.filter(r => r.month === manhoursMonth) : allSummaryRows);
+  const quarterLabel = quarter
+    ? `${quarter.label}${quarterMonthList.length ? ` (${quarterMonthList.map(fmtMonthLabel).join(', ')})` : ''}`
+    : '';
+  const runrateLabel = quarter ? quarter.label : (runrateMonth ? fmtMonthLabel(runrateMonth) : 'All Months');
+  const manhoursLabel = quarter ? quarter.label : (manhoursMonth ? fmtMonthLabel(manhoursMonth) : 'All Months');
+  const mLabel = quarter ? quarterLabel : (runrateLabel === manhoursLabel ? runrateLabel : `Runrate ${runrateLabel} / Manhours ${manhoursLabel}`);
   const fallbackNotes = [];
+  if (quarter && !runrateRows.length) {
+    fallbackNotes.push(`Runrate has no records in ${quarter.label}.`);
+  }
+  if (quarter && !rows.length) {
+    fallbackNotes.push(`Manhours has no records in ${quarter.label}.`);
+  }
   if (requestedMonth && runrateMonth && runrateMonth !== requestedMonth) {
     fallbackNotes.push(`Runrate has no ${fmtMonthLabel(requestedMonth)} records, so it is showing ${runrateLabel}.`);
   }
   if (requestedMonth && manhoursMonth && manhoursMonth !== requestedMonth) {
     fallbackNotes.push(`Manhours has no ${fmtMonthLabel(requestedMonth)} records, so it is showing ${manhoursLabel}.`);
   }
-  const weeklyRunrateRows = getWeeklyRunrateRows(runrateMonth);
+  const weeklyRunrateRows = !quarter && runrateMonth ? getWeeklyRunrateRows(runrateMonth) : [];
+  const useExcelPeriodPlanning = !!quarter;
 
   let totalCapacity = 0, totalOutput = 0;
   const machineAvailabilityValues = [];
@@ -908,21 +965,72 @@ function renderManhours(c, month) {
     ? machineAvailabilityValues.reduce((a, b) => a + b, 0) / machineAvailabilityValues.length
     : null;
  
+  function createManhoursBucket(line = '') {
+    return {
+      line,
+      months: new Set(),
+      pr: 0,
+      ar: 0,
+      pot: 0,
+      aot: 0,
+      abs: 0,
+      personDays: 0,
+      workingDays: 0,
+      manpowerSum: 0,
+      manpowerCount: 0
+    };
+  }
+
+  function addManhoursRow(bucket, row) {
+    if (row.month) bucket.months.add(row.month);
+    bucket.pr += row.planned_reg || 0;
+    bucket.ar += row.actual_reg || 0;
+    bucket.pot += row.planned_ot || 0;
+    bucket.aot += row.actual_ot || 0;
+    bucket.abs += row.absenteeism || 0;
+    bucket.personDays += row.person_days ?? calcPersonDays(row.working_days, row.manpower) ?? 0;
+
+    const workingDays = Number(row.working_days);
+    if (Number.isFinite(workingDays)) bucket.workingDays += workingDays;
+
+    const manpower = Number(row.manpower);
+    if (Number.isFinite(manpower)) {
+      bucket.manpowerSum += manpower;
+      bucket.manpowerCount++;
+    }
+  }
+
+  function finalizeManhoursBucket(bucket, useExcelPlanning) {
+    const out = { ...bucket, months: [...bucket.months].sort() };
+    if (useExcelPlanning && out.workingDays > 0 && out.manpowerCount > 0) {
+      const avgManpower = out.manpowerSum / out.manpowerCount;
+      out.personDays = out.workingDays * avgManpower;
+      out.pr = out.personDays * 8;
+      out.pot = out.personDays * 4;
+    }
+    return out;
+  }
+
   // aggregate
-  let totPR=0,totAR=0,totPOT=0,totAOT=0,totAbs=0, totPersonDays=0;
+  const periodManhoursBuckets = new Map();
   const workdayValues = [];
   const manpowerValues = [];
   rows.forEach(r=>{
-    totPR+=r.planned_reg||0;
-    totAR+=r.actual_reg||0;
-    totPOT+=r.planned_ot||0;
-    totAOT+=r.actual_ot||0;
-    totAbs+=r.absenteeism||0;
-    const personDays = r.person_days ?? calcPersonDays(r.working_days, r.manpower);
-    if (personDays !== null) totPersonDays += personDays;
+    const line = r.line || 'Plant-wide';
+    if (!periodManhoursBuckets.has(line)) periodManhoursBuckets.set(line, createManhoursBucket(line));
+    addManhoursRow(periodManhoursBuckets.get(line), r);
     if (r.working_days != null) workdayValues.push(Number(r.working_days));
     if (r.manpower != null) manpowerValues.push(Number(r.manpower));
   });
+  const periodManhoursLineRows = [...periodManhoursBuckets.values()]
+    .map(bucket => finalizeManhoursBucket(bucket, useExcelPeriodPlanning))
+    .sort((a, b) => String(a.line).localeCompare(String(b.line)));
+  const totPR = periodManhoursLineRows.reduce((sum, r) => sum + (r.pr || 0), 0);
+  const totAR = periodManhoursLineRows.reduce((sum, r) => sum + (r.ar || 0), 0);
+  const totPOT = periodManhoursLineRows.reduce((sum, r) => sum + (r.pot || 0), 0);
+  const totAOT = periodManhoursLineRows.reduce((sum, r) => sum + (r.aot || 0), 0);
+  const totAbs = periodManhoursLineRows.reduce((sum, r) => sum + (r.abs || 0), 0);
+  const totPersonDays = periodManhoursLineRows.reduce((sum, r) => sum + (r.personDays || 0), 0);
   const regUtil=calcRegHrsUtil(totAR,totPR), otUtil=calcOTUtil(totAOT,totPOT);
   const otRate = calcOTRate(totAOT, totAR);
   const totalMhUtil = calcTotalManhoursUtil(totAR, totAOT, totPR, totPOT);
@@ -934,7 +1042,8 @@ function renderManhours(c, month) {
  
   // trend
   const trendByMonth = {};
-  allSummaryRows.forEach(r => {
+  const trendSourceRows = quarter ? rows : allSummaryRows;
+  trendSourceRows.forEach(r => {
     if (!trendByMonth[r.month]) trendByMonth[r.month] = { month: r.month, pr: 0, ar: 0, pot: 0, aot: 0 };
     trendByMonth[r.month].pr += r.planned_reg || 0;
     trendByMonth[r.month].ar += r.actual_reg || 0;
@@ -962,7 +1071,8 @@ function renderManhours(c, month) {
     return a.q === b.q && a.fy === b.fy;
   }
   const runrateTrendByMonth = {};
-  allRunrateRows.forEach(r => {
+  const runrateTrendSourceRows = quarter ? runrateRows : allRunrateRows;
+  runrateTrendSourceRows.forEach(r => {
     if (!runrateTrendByMonth[r.month]) runrateTrendByMonth[r.month] = { month: r.month, cap: 0, act: 0, availability: [] };
     runrateTrendByMonth[r.month].cap += r.capacity || 0;
     runrateTrendByMonth[r.month].act += r.actual_output || 0;
@@ -992,7 +1102,7 @@ function renderManhours(c, month) {
     return eff === null ? null : eff * 100;
   });
 
-  const runrateQuarterRows = runrateMonth ? allRunrateRows.filter(r => sameFiscalQuarter(r.month, runrateMonth)) : allRunrateRows;
+  const runrateQuarterRows = quarter ? runrateRows : (runrateMonth ? allRunrateRows.filter(r => sameFiscalQuarter(r.month, runrateMonth)) : allRunrateRows);
   const runrateByQuarter = {};
   runrateQuarterRows.forEach(r => {
     const { q, fy } = fiscalQuarter(r.month);
@@ -1007,35 +1117,99 @@ function renderManhours(c, month) {
     return fyA!==fyB ? fyA-fyB : qA-qB;
   });
 
-  const manhoursQuarterRows = manhoursMonth ? allSummaryRows.filter(r => sameFiscalQuarter(r.month, manhoursMonth)) : allSummaryRows;
+  const manhoursQuarterRows = quarter ? rows : (manhoursMonth ? allSummaryRows.filter(r => sameFiscalQuarter(r.month, manhoursMonth)) : allSummaryRows);
   const mhByQuarter = {};
   manhoursQuarterRows.forEach(r => {
     const { q, fy } = fiscalQuarter(r.month);
     const key = `FY${fy} Q${q}`;
-    if (!mhByQuarter[key]) mhByQuarter[key] = { pr:0, ar:0, pot:0, aot:0, abs:0, personDays:0, months:[] };
-    mhByQuarter[key].pr  += r.planned_reg  || 0;
-    mhByQuarter[key].ar  += r.actual_reg  || 0;
-    mhByQuarter[key].pot += r.planned_ot || 0;
-    mhByQuarter[key].aot += r.actual_ot || 0;
-    mhByQuarter[key].abs += r.absenteeism || 0;
-    mhByQuarter[key].personDays += r.person_days || calcPersonDays(r.working_days, r.manpower) || 0;
-    if (!mhByQuarter[key].months.includes(r.month)) mhByQuarter[key].months.push(r.month);
+    if (!mhByQuarter[key]) mhByQuarter[key] = createManhoursBucket(key);
+    addManhoursRow(mhByQuarter[key], r);
   });
   const mhQKeys = Object.keys(mhByQuarter).sort((a,b) => {
     const [,fyA,qA]=a.match(/FY(\d+) Q(\d)/); const [,fyB,qB]=b.match(/FY(\d+) Q(\d)/);
     return fyA!==fyB ? fyA-fyB : qA-qB;
   });
-
-  const manhoursLineTotals = {};
-  rows.forEach(r => {
-    const line = r.line || 'Plant-wide';
-    if (!manhoursLineTotals[line]) manhoursLineTotals[line] = { line, planned: 0, actual: 0 };
-    manhoursLineTotals[line].planned += (r.planned_reg || 0) + (r.planned_ot || 0);
-    manhoursLineTotals[line].actual += (r.actual_reg || 0) + (r.actual_ot || 0);
+  const finalizedMhByQuarter = {};
+  mhQKeys.forEach(k => {
+    finalizedMhByQuarter[k] = finalizeManhoursBucket(mhByQuarter[k], true);
   });
-  const manhoursLineRows = Object.values(manhoursLineTotals).sort((a, b) => String(a.line).localeCompare(String(b.line)));
+
+  const manhoursLineRows = periodManhoursLineRows.map(r => ({
+    line: r.line,
+    planned: (r.pr || 0) + (r.pot || 0),
+    actual: (r.ar || 0) + (r.aot || 0)
+  }));
   const manhoursLineLabels = manhoursLineRows.map(r => r.line);
   const manhoursLineUtil = manhoursLineRows.map(r => r.planned > 0 ? (r.actual / r.planned) * 100 : null);
+
+  const runrateFocusBuckets = new Map();
+  const runrateFocusUsesWeekly = !!runrateMonth && weeklyRunrateRows.length > 0;
+  const runrateFocusRows = runrateFocusUsesWeekly ? weeklyRunrateRows : runrateRows;
+
+  function addRunrateFocusPoint(line, pointKey, pointLabel, pointOrder, capacity, actual) {
+    const addToSeries = (seriesKey, seriesLabel, rank) => {
+      if (!runrateFocusBuckets.has(seriesKey)) {
+        runrateFocusBuckets.set(seriesKey, { key: seriesKey, line: seriesLabel, rank, points: new Map() });
+      }
+      const series = runrateFocusBuckets.get(seriesKey);
+      if (!series.points.has(pointKey)) {
+        series.points.set(pointKey, { key: pointKey, label: pointLabel, order: pointOrder, cap: 0, act: 0 });
+      }
+      const point = series.points.get(pointKey);
+      point.cap += capacity || 0;
+      point.act += actual || 0;
+    };
+
+    const lineLabel = line || 'Plant-wide';
+    addToSeries('__plant__', 'Plant-wide', 0);
+    if (lineLabel !== 'Plant-wide') addToSeries(lineLabel, lineLabel, 1);
+  }
+
+  runrateFocusRows.forEach(r => {
+    const pointKey = runrateFocusUsesWeekly
+      ? `${r.month || ''}|${r.week_num || r.week_label || ''}`
+      : (r.month || runrateLabel);
+    const pointLabel = runrateFocusUsesWeekly
+      ? (r.week_label || `Week ${r.week_num || ''}`.trim())
+      : (r.month ? fmtMonthLabel(r.month) : runrateLabel);
+    const pointOrder = runrateFocusUsesWeekly
+      ? (r.week_num || r.week_label || 0)
+      : (r.month || runrateLabel);
+    addRunrateFocusPoint(r.line, pointKey, pointLabel, pointOrder, r.capacity, r.actual_output);
+  });
+
+  const runrateFocusSeries = [...runrateFocusBuckets.values()]
+    .map(series => {
+      const points = [...series.points.values()].sort((a, b) => {
+        if (typeof a.order === 'number' && typeof b.order === 'number') return a.order - b.order;
+        return String(a.order).localeCompare(String(b.order));
+      });
+      const cap = points.reduce((sum, p) => sum + (p.cap || 0), 0);
+      const act = points.reduce((sum, p) => sum + (p.act || 0), 0);
+      return { ...series, points, cap, act, eff: calcEfficiency(cap, act) };
+    })
+    .filter(series => series.points.length)
+    .sort((a, b) => a.rank !== b.rank ? a.rank - b.rank : String(a.line).localeCompare(String(b.line)));
+
+  const capacityGap = runrateRows.length ? totalCapacity - totalOutput : null;
+  const capacityGapText = capacityGap === null
+    ? '&mdash;'
+    : capacityGap >= 0
+      ? `${fmtN(capacityGap, 0)} below capacity`
+      : `${fmtN(Math.abs(capacityGap), 0)} above capacity`;
+  const runrateHealthClass = runrateEff === null ? 'stat-neutral' : runrateEff >= 0.95 ? 'stat-good' : runrateEff >= 0.85 ? 'stat-watch' : 'stat-bad';
+  const gapHealthClass = capacityGap === null ? 'stat-neutral' : capacityGap <= 0 ? 'stat-good' : runrateEff >= 0.85 ? 'stat-watch' : 'stat-bad';
+  const availabilityHealthClass = avgMachineAvailability === null ? 'stat-neutral' : avgMachineAvailability >= 0.9 ? 'stat-good' : avgMachineAvailability >= 0.8 ? 'stat-watch' : 'stat-bad';
+  const runrateFocusTitle = runrateFocusUsesWeekly
+    ? `Output Capacity vs Actual by Week - ${runrateLabel}`
+    : `Output Capacity vs Actual by Month - ${runrateLabel}`;
+  const runrateFocusContext = runrateFocusUsesWeekly
+    ? 'Weekly runrate entries'
+    : quarter
+      ? 'Monthly rollup for selected quarter'
+      : runrateMonth
+      ? 'Manual monthly runrate entries'
+      : 'Monthly rollup across available data';
  
   c.innerHTML = `
     <div class="page-header">
@@ -1043,36 +1217,53 @@ function renderManhours(c, month) {
       <p>Weekly runrate efficiency and monthly manhours utilization - ${mLabel}</p>
     </div>
     ${fallbackNotes.length ? `<div class="info-block">${fallbackNotes.join(' ')}</div>` : ''}
-    <div class="section-gap">
-      <div class="card-title" style="margin-bottom:12px;color:var(--gray-500)">RUNRATE EFFICIENCY - ${runrateLabel}</div>
-      <div class="metrics-grid">
-        <div class="metric-card">
-          <div class="metric-label">Capacity</div>
-          <div class="metric-value">${runrateRows.length ? fmtN(totalCapacity,0) : '&mdash;'}</div>
-          <div class="metric-sub">planned output capacity</div>
+    <div class="runrate-overview section-gap">
+      <div class="overview-stat">
+        <div class="overview-label">Capacity</div>
+        <div class="overview-value">${runrateRows.length ? fmtN(totalCapacity,0) : '&mdash;'}</div>
+        <div class="overview-sub">planned output</div>
+      </div>
+      <div class="overview-stat">
+        <div class="overview-label">Actual Output</div>
+        <div class="overview-value">${runrateRows.length ? fmtN(totalOutput,0) : '&mdash;'}</div>
+        <div class="overview-sub">produced output</div>
+      </div>
+      <div class="overview-stat ${runrateHealthClass}">
+        <div class="overview-label">Efficiency</div>
+        <div class="overview-value">${runrateEff !== null ? (runrateEff*100).toFixed(2)+'%' : '&mdash;'}</div>
+        <div class="overview-sub">${totalCapacity > 0 ? `${fmtN(totalOutput,0)} / ${fmtN(totalCapacity,0)}` : 'No runrate data'}</div>
+      </div>
+      <div class="overview-stat ${gapHealthClass}">
+        <div class="overview-label">Capacity Gap</div>
+        <div class="overview-value">${capacityGapText}</div>
+        <div class="overview-sub">actual vs planned</div>
+      </div>
+      <div class="overview-stat ${availabilityHealthClass}">
+        <div class="overview-label">Machine Availability</div>
+        <div class="overview-value">${avgMachineAvailability !== null ? (avgMachineAvailability*100).toFixed(2)+'%' : '&mdash;'}</div>
+        <div class="overview-sub">${machineAvailabilityValues.length ? `${fmtN(machineAvailabilityValues.length,0)} records` : 'No availability data'}</div>
+      </div>
+    </div>
+
+    <div class="card runrate-focus-card section-gap">
+      <div class="runrate-focus-head">
+        <div>
+          <div class="card-title">${runrateFocusTitle}</div>
+          <div class="card-subtitle">${runrateFocusContext}</div>
         </div>
-        <div class="metric-card">
-          <div class="metric-label">Actual Output</div>
-          <div class="metric-value">${runrateRows.length ? fmtN(totalOutput,0) : '&mdash;'}</div>
-          <div class="metric-sub">actual weekly/monthly output</div>
-        </div>
-        <div class="metric-card">
-          <div class="metric-label">Runrate Efficiency</div>
-          <div class="metric-value">${runrateEff !== null ? (runrateEff*100).toFixed(2)+'%' : '&mdash;'}</div>
-          <div class="metric-sub">${totalCapacity > 0 ? `${fmtN(totalOutput,0)} / ${fmtN(totalCapacity,0)}` : 'No runrate data'}</div>
-          <div class="progress-bar"><div class="progress-fill ${runrateEff>=0.95?'progress-green':runrateEff>=0.85?'progress-amber':'progress-red'}" style="width:${runrateEff?Math.min(runrateEff*100,100):0}%"></div></div>
-        </div>
-        <div class="metric-card">
-          <div class="metric-label">Machine Availability</div>
-          <div class="metric-value">${avgMachineAvailability !== null ? (avgMachineAvailability*100).toFixed(2)+'%' : '&mdash;'}</div>
-          <div class="metric-sub">${machineAvailabilityValues.length ? `${fmtN(machineAvailabilityValues.length,0)} availability records` : 'No availability data'}</div>
-        </div>
+        ${runrateFocusSeries.length > 1 ? `
+          <div class="runrate-focus-tabs" aria-label="Runrate line focus">
+            ${runrateFocusSeries.map((series, i) => `<button type="button" class="focus-tab ${i === 0 ? 'active' : ''}" data-runrate-focus="${i}">${series.line}</button>`).join('')}
+          </div>` : ''}
+      </div>
+      <div class="chart-container chart-container-lg">
+        ${runrateFocusSeries.length ? '<canvas id="runrateCapacityActualChart" aria-label="Output capacity versus actual">Output capacity versus actual</canvas>' : '<div class="empty"><p>No runrate capacity data yet.</p></div>'}
       </div>
     </div>
 
     <div class="grid-2 section-gap">
       <div class="card">
-        <div class="card-title" style="margin-bottom:14px">Runrate Monthly Trend</div>
+        <div class="card-title" style="margin-bottom:14px">Monthly Efficiency &amp; Availability</div>
         <div class="chart-container">
           ${runrateTrendLabels.length ? '<canvas id="runrateTrendChart" aria-label="Runrate monthly trend">Runrate monthly trend</canvas>' : '<div class="empty"><p>No runrate trend data yet.</p></div>'}
         </div>
@@ -1084,6 +1275,12 @@ function renderManhours(c, month) {
         </div>
       </div>
     </div>
+
+    <details class="detail-disclosure section-gap">
+      <summary>
+        <span>Runrate detail tables</span>
+        <small>${runrateRows.length ? `${fmtN(runrateRows.length,0)} monthly rows` : 'No monthly rows'}${weeklyRunrateRows.length ? ` / ${fmtN(weeklyRunrateRows.length,0)} weekly rows` : ''}</small>
+      </summary>
 
     ${runrateQKeys.length ? `
     <div class="card section-gap">
@@ -1153,6 +1350,7 @@ function renderManhours(c, month) {
         </table>
       </div>
     </div>
+    </details>
 
     <div class="section-gap">
       <div class="card-title" style="margin-bottom:12px;color:var(--gray-500)">MANHOURS - ${manhoursLabel}</div>
@@ -1218,6 +1416,12 @@ function renderManhours(c, month) {
       </div>
     </div>
 
+    <details class="detail-disclosure section-gap">
+      <summary>
+        <span>Manhours detail tables</span>
+        <small>${rows.length ? `${fmtN(rows.length,0)} line records` : 'No line records'}</small>
+      </summary>
+
     ${mhQKeys.length ? `
     <div class="card section-gap">
       <div class="card-title" style="margin-bottom:14px">Quarterly Manhours Summary</div>
@@ -1226,7 +1430,7 @@ function renderManhours(c, month) {
           <thead><tr><th>Quarter</th><th>Months</th><th>Person-Days</th><th>Planned Reg</th><th>Actual Reg</th><th>Reg Util%</th><th>Planned OT</th><th>Actual OT</th><th>OT Util%</th><th>OT Rate</th><th>Absenteeism</th><th>Absent %</th></tr></thead>
           <tbody>
             ${mhQKeys.map(k => {
-              const q = mhByQuarter[k];
+              const q = finalizedMhByQuarter[k];
               const ru = calcRegHrsUtil(q.ar, q.pr);
               const ou = calcOTUtil(q.aot, q.pot);
               const otr = calcOTRate(q.aot, q.ar);
@@ -1287,7 +1491,124 @@ function renderManhours(c, month) {
         </table>
       </div>
     </div>
+    </details>
   `;
+
+  destroyChart('runrateCapacityActual');
+  const runrateCapacityCtx = document.getElementById('runrateCapacityActualChart');
+  if (runrateCapacityCtx && runrateFocusSeries.length) {
+    const focusTabs = [...c.querySelectorAll('[data-runrate-focus]')];
+    const pointLabelPlugin = {
+      id: 'runrateCapacityPointLabels',
+      afterDatasetsDraw(chart) {
+        const labels = chart.data.labels || [];
+        if (labels.length > 7 || chart.width < 420) return;
+        const { ctx } = chart;
+        ctx.save();
+        chart.data.datasets.forEach((dataset, datasetIndex) => {
+          const meta = chart.getDatasetMeta(datasetIndex);
+          if (meta.hidden) return;
+          ctx.fillStyle = dataset.borderColor;
+          ctx.font = '600 11px Segoe UI, system-ui, sans-serif';
+          ctx.textAlign = 'center';
+          meta.data.forEach((point, index) => {
+            const value = dataset.data[index];
+            if (value == null) return;
+            ctx.textBaseline = datasetIndex === 0 ? 'bottom' : 'top';
+            const offset = datasetIndex === 0 ? -7 : 7;
+            ctx.fillText(fmtN(value, 0), point.x, point.y + offset);
+          });
+        });
+        ctx.restore();
+      }
+    };
+
+    const displayRunrateLabel = label => {
+      const match = String(label).match(/^([A-Za-z]{3})\s+WEEK\s+(.+)$/);
+      return match ? [match[1].toUpperCase(), `WEEK ${match[2]}`] : label;
+    };
+
+    const drawRunrateCapacityActual = index => {
+      const series = runrateFocusSeries[index] || runrateFocusSeries[0];
+      destroyChart('runrateCapacityActual');
+      focusTabs.forEach((tab, tabIndex) => tab.classList.toggle('active', tabIndex === index));
+
+      charts['runrateCapacityActual'] = new Chart(runrateCapacityCtx, {
+        type: 'line',
+        data: {
+          labels: series.points.map(p => displayRunrateLabel(p.label)),
+          datasets: [
+            {
+              label: 'Capacity',
+              data: series.points.map(p => p.cap),
+              borderColor: '#0f5f83',
+              backgroundColor: 'rgba(15,95,131,0.08)',
+              pointBackgroundColor: '#0f5f83',
+              pointBorderColor: '#ffffff',
+              pointBorderWidth: 2,
+              pointRadius: 4,
+              pointHoverRadius: 5,
+              borderWidth: 3,
+              tension: 0.25
+            },
+            {
+              label: 'Actual',
+              data: series.points.map(p => p.act),
+              borderColor: '#ea580c',
+              backgroundColor: 'rgba(234,88,12,0.08)',
+              pointBackgroundColor: '#ea580c',
+              pointBorderColor: '#ffffff',
+              pointBorderWidth: 2,
+              pointRadius: 4,
+              pointHoverRadius: 5,
+              borderWidth: 3,
+              tension: 0.25
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { mode: 'index', intersect: false },
+          plugins: {
+            legend: {
+              position: 'bottom',
+              labels: { font: { size: 11 }, boxWidth: 18, usePointStyle: true, pointStyle: 'line' }
+            },
+            tooltip: {
+              callbacks: {
+                afterBody: items => {
+                  if (!items.length) return '';
+                  const idx = items[0].dataIndex;
+                  const point = series.points[idx];
+                  const eff = calcEfficiency(point.cap, point.act);
+                  return eff !== null ? `Efficiency: ${(eff * 100).toFixed(2)}%` : '';
+                }
+              }
+            }
+          },
+          scales: {
+            y: {
+              grace: '10%',
+              grid: { color: '#e2e8f0' },
+              ticks: { font: { size: 11 }, callback: v => fmtN(v, 0) },
+              title: { display: true, text: 'Output units', font: { size: 11, weight: '600' } }
+            },
+            x: {
+              grid: { display: false },
+              ticks: { font: { size: 11 }, maxRotation: 0, autoSkip: false }
+            }
+          }
+        },
+        plugins: [pointLabelPlugin]
+      });
+    };
+
+    focusTabs.forEach((tab, index) => {
+      tab.addEventListener('click', () => drawRunrateCapacityActual(index));
+    });
+    drawRunrateCapacityActual(0);
+  }
  
   destroyChart('runrateTrend');
   const runrateTrendCtx = document.getElementById('runrateTrendChart');
@@ -1394,40 +1715,51 @@ function renderManhours(c, month) {
 }
  
 // ── LOSS DASHBOARD ─────────────────────────────────────────────────────────────
-function renderLoss(c, month) {
-  const selectedMonth = month || '';
-  const fiscalQuarter = isoMonth => {
-    if (!isoMonth) return null;
-    const [year, mo] = String(isoMonth).split('-').map(Number);
-    if (!year || !mo) return null;
-    if (mo >= 10) return { q: 1, fy: year + 1 };
-    if (mo <= 3) return { q: 2, fy: year };
-    if (mo <= 6) return { q: 3, fy: year };
-    return { q: 4, fy: year };
-  };
-  const sameFiscalQuarter = (a, b) => {
-    const qa = fiscalQuarter(a);
-    const qb = fiscalQuarter(b);
-    return !!qa && !!qb && qa.q === qb.q && qa.fy === qb.fy;
-  };
-  const quarterLabel = isoMonth => {
-    const q = fiscalQuarter(isoMonth);
-    return q ? `FY${q.fy} Q${q.q}` : fmtMonthLabel(isoMonth);
-  };
+// Signature change: renderLoss(c, month, quarter)
+//   month   — a specific YYYY-MM string, or '' for no month filter
+//   quarter — a quarter descriptor { fy, q, months, dataMonths, label }
+//             or null if not in quarter mode
+//
+// Priority: quarter > month > all months
 
-  // ── Pull raw data ─────────────────────────────────────────────────────────────
+function renderLoss(c, month, quarter) {
+
+  // ── Determine which months to include ───────────────────────────────────────
+  // selectedMonths: array of YYYY-MM to filter on, or [] for all
+  let selectedMonths = [];
+  let mLabel = 'All Months';
+  let isQuarterMode = false;
+
+  if (quarter) {
+    // Quarter selection: use only the months in that quarter that have data
+    selectedMonths = quarter.dataMonths || quarter.months;
+    mLabel = quarter.label;
+    isQuarterMode = true;
+  } else if (month) {
+    // Specific month
+    selectedMonths = [month];
+    mLabel = fmtMonthLabel(month);
+  }
+  // else: all months, selectedMonths stays []
+
+  const inSelectedPeriod = row =>
+    selectedMonths.length === 0 || selectedMonths.includes(row.month);
+
+  // ── Pull raw data ────────────────────────────────────────────────────────────
   const allRunrateRows = getRunrateSummaryRows('');
   const allManhoursRows = getManhoursSummaryRows('');
-  const inSelectedPeriod = row => !selectedMonth || sameFiscalQuarter(row.month, selectedMonth);
   const rrRows = allRunrateRows.filter(inSelectedPeriod);
   const mhRows = allManhoursRows.filter(inSelectedPeriod);
-  const periodMonths = [...new Set([...rrRows, ...mhRows].map(r => r.month).filter(Boolean))].sort();
-  const mLabel = selectedMonth ? quarterLabel(selectedMonth) : 'All Months';
-  const periodLabel = selectedMonth && periodMonths.length
-    ? `${mLabel} (${periodMonths.map(fmtMonthLabel).join(', ')})`
-    : mLabel;
 
-  // ── Per-line rows for the selected period ─────────────────────────────────────
+  const periodMonths = [...new Set([...rrRows, ...mhRows].map(r => r.month).filter(Boolean))].sort();
+
+  // Build a readable subtitle
+  let periodLabel = mLabel;
+  if (isQuarterMode && periodMonths.length) {
+    periodLabel = `${mLabel} (${periodMonths.map(fmtMonthLabel).join(', ')})`;
+  }
+
+  // ── Per-line aggregation ─────────────────────────────────────────────────────
   const lineBuckets = new Map();
   const getBucket = line => {
     const label = line || 'Plant-wide';
@@ -1435,12 +1767,9 @@ function renderLoss(c, month) {
       lineBuckets.set(label, {
         line: label,
         months: new Set(),
-        _rrCap: 0,
-        _rrAct: 0,
-        _personDays: 0,
-        _absDays: 0,
-        _plannedMH: 0,
-        _actualMH: 0
+        _rrCap: 0, _rrAct: 0,
+        _personDays: 0, _absDays: 0,
+        _plannedMH: 0, _actualMH: 0
       });
     }
     return lineBuckets.get(label);
@@ -1457,36 +1786,30 @@ function renderLoss(c, month) {
     const bucket = getBucket(r.line);
     if (r.month) bucket.months.add(r.month);
     bucket._personDays += r.person_days ?? calcPersonDays(r.working_days, r.manpower) ?? 0;
-    bucket._absDays += r.absenteeism || 0;
-    bucket._plannedMH += (r.planned_reg || 0) + (r.planned_ot || 0);
-    bucket._actualMH += (r.actual_reg || 0) + (r.actual_ot || 0);
+    bucket._absDays    += r.absenteeism || 0;
+    bucket._plannedMH  += (r.planned_reg || 0) + (r.planned_ot || 0);
+    bucket._actualMH   += (r.actual_reg  || 0) + (r.actual_ot  || 0);
   });
 
   const rows = [...lineBuckets.values()]
     .sort((a, b) => String(a.line).localeCompare(String(b.line)))
     .map(bucket => {
       const runrateLoss = bucket._rrCap > 0 ? 1 - (bucket._rrAct / bucket._rrCap) : null;
-      const absLoss = bucket._personDays > 0 ? bucket._absDays / bucket._personDays : null;
-      const mhLoss = bucket._plannedMH > 0 ? 1 - (bucket._actualMH / bucket._plannedMH) : null;
-      const rowTotal = (runrateLoss || 0) + (absLoss || 0) + (mhLoss || 0);
-
+      const absLoss     = bucket._personDays > 0 ? bucket._absDays / bucket._personDays : null;
+      const mhLoss      = bucket._plannedMH  > 0 ? 1 - (bucket._actualMH / bucket._plannedMH) : null;
+      const rowTotal    = (runrateLoss || 0) + (absLoss || 0) + (mhLoss || 0);
       return {
         ...bucket,
-        period: mLabel,
         monthList: [...bucket.months].sort().map(fmtMonthLabel).join(', '),
-        runrateLoss,
-        absLoss,
-        mhLoss,
+        runrateLoss, absLoss, mhLoss,
         total: rowTotal,
         runPct: rowTotal > 0 && runrateLoss != null ? runrateLoss / rowTotal : null,
-        absPct: rowTotal > 0 && absLoss != null ? absLoss / rowTotal : null,
-        mhPct: rowTotal > 0 && mhLoss != null ? mhLoss / rowTotal : null
+        absPct: rowTotal > 0 && absLoss     != null ? absLoss     / rowTotal : null,
+        mhPct:  rowTotal > 0 && mhLoss      != null ? mhLoss      / rowTotal : null
       };
     });
 
-  // ── Aggregate for KPI cards & chart ──────────────────────────────────────────
-  // Match Excel's approach: aggregate raw totals first, THEN compute loss rate.
-  // e.g.  runrate loss = 1 − SUM(actual) / SUM(capacity)  (not avg of monthly rates)
+  // ── Plant-wide aggregates ────────────────────────────────────────────────────
   let totalCap = 0, totalAct = 0;
   let totalPersonDays = 0, totalAbsDays = 0;
   let totalPlannedMH = 0, totalActualMH = 0;
@@ -1500,18 +1823,16 @@ function renderLoss(c, month) {
     totalActualMH   += r._actualMH;
   });
 
-  const aggRunLoss = totalCap > 0 ? 1 - totalAct / totalCap : null;
-  const aggAbsLoss = totalPersonDays > 0 ? totalAbsDays / totalPersonDays : null;
-  const aggMhLoss  = totalPlannedMH  > 0 ? 1 - totalActualMH / totalPlannedMH : null;
+  const aggRunLoss = totalCap        > 0 ? 1 - totalAct       / totalCap        : null;
+  const aggAbsLoss = totalPersonDays > 0 ? totalAbsDays        / totalPersonDays  : null;
+  const aggMhLoss  = totalPlannedMH  > 0 ? 1 - totalActualMH  / totalPlannedMH   : null;
 
-  const aggTotal = (aggRunLoss || 0) + (aggAbsLoss || 0) + (aggMhLoss || 0);
+  const aggTotal  = (aggRunLoss || 0) + (aggAbsLoss || 0) + (aggMhLoss || 0);
   const aggRunPct = aggTotal > 0 && aggRunLoss != null ? aggRunLoss / aggTotal : null;
   const aggAbsPct = aggTotal > 0 && aggAbsLoss != null ? aggAbsLoss / aggTotal : null;
   const aggMhPct  = aggTotal > 0 && aggMhLoss  != null ? aggMhLoss  / aggTotal : null;
 
   const hasData = rows.length > 0;
-
-  // Helper: colour class for contribution cells
   const contribClass = pct => pct > 0.5 ? 'td-red' : pct > 0.25 ? 'td-amber' : '';
 
   c.innerHTML = `
@@ -1600,13 +1921,14 @@ function renderLoss(c, month) {
     <div class="card">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
         <div class="card-title">Loss by Line — ${mLabel}</div>
-        ${!selectedMonth ? '<div style="font-size:11px;color:var(--gray-400)">Select a month in the sidebar to view its fiscal quarter</div>' : ''}
+        ${!month && !quarter ? '<div style="font-size:11px;color:var(--gray-400)">Select a month or quarter in the sidebar to filter</div>' : ''}
       </div>
       <div class="table-wrap">
         <table>
           <thead>
             <tr>
-              <th>Period</th><th>Line</th>
+              <th>Line</th>
+              ${isQuarterMode || !month ? '<th>Months Included</th>' : ''}
               <th class="td-number">Runrate Loss %</th>
               <th class="td-number">Absence Loss %</th>
               <th class="td-number">Manhours Loss %</th>
@@ -1617,11 +1939,11 @@ function renderLoss(c, month) {
           </thead>
           <tbody>
             ${hasData ? rows.map(r => `<tr>
-              <td title="${r.monthList}">${r.period}</td>
               <td><strong>${r.line || '—'}</strong></td>
+              ${isQuarterMode || !month ? `<td style="color:var(--gray-500);font-size:12px">${r.monthList}</td>` : ''}
               <td class="td-number">${r.runrateLoss != null ? (r.runrateLoss*100).toFixed(2)+'%' : '—'}</td>
-              <td class="td-number">${r.absLoss    != null ? (r.absLoss*100).toFixed(2)+'%'     : '—'}</td>
-              <td class="td-number">${r.mhLoss     != null ? (r.mhLoss*100).toFixed(2)+'%'      : '—'}</td>
+              <td class="td-number">${r.absLoss     != null ? (r.absLoss*100).toFixed(2)+'%'     : '—'}</td>
+              <td class="td-number">${r.mhLoss      != null ? (r.mhLoss*100).toFixed(2)+'%'      : '—'}</td>
               <td class="td-number ${contribClass(r.runPct)}" style="border-left:2px solid var(--gray-200)">${r.runPct != null ? (r.runPct*100).toFixed(1)+'%' : '—'}</td>
               <td class="td-number ${contribClass(r.absPct)}">${r.absPct != null ? (r.absPct*100).toFixed(1)+'%' : '—'}</td>
               <td class="td-number ${contribClass(r.mhPct)}">${r.mhPct  != null ? (r.mhPct*100).toFixed(1)+'%'  : '—'}</td>
@@ -1669,20 +1991,115 @@ function renderLoss(c, month) {
 function renderBudget(c, month) {
   const rows = getBudgetActualRows(month);
   const mLabel = month ? fmtMonthLabel(month) : 'All Months';
+  const allRows = getBudgetActualRows('');
+  const rowHasActual = r => [r.utility_cost, r.rm_cost, r.volume].some(v => v != null);
+  const detailRows = rows.filter(rowHasActual);
+  const selectedMonthHasActual = month ? rows.some(rowHasActual) : false;
+  const latestMonthBy = fields => [...allRows]
+    .filter(r => fields.some(field => r[field] != null && r[field] !== 0))
+    .sort((a, b) => String(a.month).localeCompare(String(b.month)))
+    .at(-1)?.month || '';
+  const summaryBaseMonth = month && selectedMonthHasActual
+    ? month
+    : latestMonthBy(['utility_cost', 'rm_cost', 'volume'])
+      || latestMonthBy(['utility_budget', 'rm_budget', 'volume_budget']);
+  const summaryFY = summaryBaseMonth ? getFY(summaryBaseMonth) : null;
+  const fyMonths = summaryFY ? getFYMonths(summaryFY) : [];
+  const periodMonths = summaryBaseMonth
+    ? fyMonths.slice(0, Math.max(fyMonths.indexOf(summaryBaseMonth), 0) + 1)
+    : [];
+  const summaryRowsSource = periodMonths.length
+    ? allRows.filter(r => periodMonths.includes(r.month))
+    : allRows;
+
+  const sum = field => summaryRowsSource.reduce((total, r) => total + (Number(r[field]) || 0), 0);
+  const actualTotals = {
+    utility: sum('utility_cost'),
+    rm: sum('rm_cost'),
+    volume: sum('volume')
+  };
+  actualTotals.engg = actualTotals.volume > 0
+    ? (actualTotals.utility + actualTotals.rm) / actualTotals.volume
+    : null;
+
+  const obTotals = {
+    utility: sum('utility_budget'),
+    rm: sum('rm_budget'),
+    volume: sum('volume_budget')
+  };
+  obTotals.engg = obTotals.volume > 0
+    ? (obTotals.utility + obTotals.rm) / obTotals.volume
+    : null;
+
+  const summaryPeriodLabel = summaryFY && summaryBaseMonth
+    ? `FY${summaryFY} through ${fmtMonthLabel(summaryBaseMonth)}`
+    : 'All available months';
+  const summaryMetrics = [
+    { key: 'utility', label: 'Utilities', decimals: 2, lowerIsBetter: true },
+    { key: 'rm', label: 'R & M', decimals: 2, lowerIsBetter: true },
+    { key: 'volume', label: 'Volume', decimals: 2, lowerIsBetter: false },
+    { key: 'engg', label: 'Engg CC', decimals: 4, lowerIsBetter: true }
+  ];
+  const varianceClass = (metric, actual, ob) => {
+    if (actual == null || ob == null) return '';
+    const favorable = metric.lowerIsBetter ? actual <= ob : actual >= ob;
+    return favorable ? 'td-green' : 'td-red';
+  };
+  const formatSummaryValue = (value, decimals) =>
+    value == null || !isFinite(value) ? '&mdash;' : fmtN(value, decimals);
  
   c.innerHTML = `
     <div class="page-header">
       <h1>OB vs Actual</h1>
       <p>Compare ACT results against OB/target values — ${mLabel}</p>
     </div>
+    <div class="card budget-summary-card section-gap">
+      <div class="budget-summary-head">
+        <div>
+          <div class="card-title">FY Total Summary</div>
+          <div class="card-subtitle">${summaryPeriodLabel} - formula chain follows the Excel workbook</div>
+        </div>
+        <span class="pill pill-blue">OB - Actual</span>
+      </div>
+      <div class="table-wrap budget-summary-table">
+        <table>
+          <thead>
+            <tr>
+              <th>Metric</th>
+              <th class="td-number">Total Actual${summaryFY ? ` FY${summaryFY}` : ''}</th>
+              <th class="td-number">Total OB${summaryFY ? ` FY${summaryFY}` : ''}</th>
+              <th class="td-number">Absolute Variance</th>
+              <th class="td-number">Percent Variance</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${summaryMetrics.map(metric => {
+              const actual = actualTotals[metric.key];
+              const ob = obTotals[metric.key];
+              const variance = actual != null && ob != null ? ob - actual : null;
+              const variancePct = ob ? variance / Math.abs(ob) : null;
+              const cls = varianceClass(metric, actual, ob);
+              return `<tr>
+                <td><strong>${metric.label}</strong></td>
+                <td class="td-number">${formatSummaryValue(actual, metric.decimals)}</td>
+                <td class="td-number">${formatSummaryValue(ob, metric.decimals)}</td>
+                <td class="td-number ${cls}"><strong>${formatSummaryValue(variance, metric.decimals)}</strong></td>
+                <td class="td-number ${cls}">${variancePct != null ? (variancePct * 100).toFixed(1) + '%' : '&mdash;'}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
     <div class="card section-gap">
       <div class="card-title" style="margin-bottom:14px">OB vs Actual</div>
       <div class="chart-container">
-        <canvas id="budgetChart" aria-label="OB vs actual bar chart">OB vs actual comparison</canvas>
+        ${detailRows.length ? '<canvas id="budgetChart" aria-label="OB vs actual bar chart">OB vs actual comparison</canvas>' : '<div class="empty"><p>No actual months available for OB vs Actual chart.</p></div>'}
       </div>
     </div>
     <div class="card">
-      <div class="card-title" style="margin-bottom:14px">OB Variance Records</div>
+      <div class="card-title" style="margin-bottom:14px">Monthly OB Variance Detail</div>
+      <div class="card-subtitle" style="margin-bottom:12px">Shows only months with ACT data. Monthly variance uses Actual - OB, so positive cost variance is unfavorable while positive volume variance is favorable.</div>
       <div class="table-wrap">
         <table>
           <thead><tr><th>Month</th>
@@ -1691,7 +2108,7 @@ function renderBudget(c, month) {
             <th>Vol OB (MT)</th><th>Vol Actual (MT)</th><th>Vol Var</th><th>Vol Var %</th>
           </tr></thead>
           <tbody>
-            ${rows.length ? rows.map(r=>{
+            ${detailRows.length ? detailRows.map(r=>{
               const uv=r.utility_cost!=null?calcVariance(r.utility_cost,r.utility_budget):null;
               const uvp=r.utility_cost!=null?calcVariancePct(r.utility_cost,r.utility_budget):null;
               const rv=r.rm_cost!=null?calcVariance(r.rm_cost,r.rm_budget):null;
@@ -1713,7 +2130,7 @@ function renderBudget(c, month) {
                 <td class="td-number ${vv!==null?(vv<0?'td-red':'td-green'):''}"><strong>${vv!==null?fmtN(vv,3):'—'}</strong></td>
                 <td class="td-number ${vvp!==null?(vvp<0?'td-red':'td-green'):''}">${vvp!==null?((vvp*100).toFixed(1)+'%'):'—'}</td>
               </tr>`;
-            }).join('') : '<tr><td colspan="13"><div class="empty"><p>No OB/target data. Import an OB workbook or enter targets first.</p></div></td></tr>'}
+            }).join('') : '<tr><td colspan="13"><div class="empty"><p>No months with actual data yet. Enter or import ACT values to calculate monthly variance.</p></div></td></tr>'}
           </tbody>
         </table>
       </div>
@@ -1722,10 +2139,10 @@ function renderBudget(c, month) {
  
   destroyChart('budgetChart');
   const ctx=document.getElementById('budgetChart');
-  if(ctx && rows.length){
-    const labels=rows.map(r=>fmtMonthLabel(r.month)).reverse();
-    const ubud=rows.map(r=>r.utility_budget).reverse(), uact=rows.map(r=>r.utility_cost).reverse();
-    const rbud=rows.map(r=>r.rm_budget).reverse(), ract=rows.map(r=>r.rm_cost).reverse();
+  if(ctx && detailRows.length){
+    const labels=detailRows.map(r=>fmtMonthLabel(r.month)).reverse();
+    const ubud=detailRows.map(r=>r.utility_budget).reverse(), uact=detailRows.map(r=>r.utility_cost).reverse();
+    const rbud=detailRows.map(r=>r.rm_budget).reverse(), ract=detailRows.map(r=>r.rm_cost).reverse();
     charts['budgetChart'] = new Chart(ctx, {
       type: 'bar',
       data: {
