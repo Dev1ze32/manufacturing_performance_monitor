@@ -119,7 +119,7 @@ function saveUtility() {
   navigateTo('entry-utilities');
 }
 function editUtility(month,util,rm,volume){
-  document.getElementById('u_month').value=month;
+  setVal('u_month',month);
   document.getElementById('u_util').value=util||'';
   document.getElementById('u_rm').value=rm||'';
   document.getElementById('u_vol').value=volume||'';

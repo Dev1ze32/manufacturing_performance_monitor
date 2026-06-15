@@ -35,7 +35,15 @@ export function fmtMonthLabel(m) {
 
 // FORM/UI HELPERS
 export function val(id){ return (document.getElementById(id)||{}).value||''; }
-export function setVal(id,v){ const el=document.getElementById(id); if(el) el.value=v!=null?v:''; }
+export function setVal(id,v){
+  const el=document.getElementById(id);
+  if (!el) return;
+  const value = v != null ? String(v) : '';
+  if (value && el.tagName === 'SELECT' && ![...el.options].some(option => option.value === value)) {
+    el.add(new Option(fmtMonthLabel(value) || value, value));
+  }
+  el.value=value;
+}
 export function parseN(id){ const v=parseFloat(val(id)); return isNaN(v)?null:v; }
 export function clearForm(ids){ ids.forEach(id=>setVal(id,'')); }
 
@@ -151,6 +159,10 @@ export function getQuartersForFY(fy, withData) {
 
 export function monthOptions(selected='') {
   const months = buildMonthRange(getDistinctMonths());
+  if (selected && /^\d{4}-\d{2}$/.test(selected) && !months.includes(selected)) {
+    months.push(selected);
+    months.sort();
+  }
   return months.map(m => `<option value="${m}" ${m===selected?'selected':''}>${fmtMonthLabel(m)}</option>`).join('');
 }
 
@@ -366,14 +378,13 @@ window._selectQuarter = function(fy, q) {
 
 function buildMonthRange(existingMonths = []) {
   const validExisting = existingMonths.filter(m => /^\d{4}-\d{2}$/.test(m)).sort();
-  const defaultStart  = '2024-10';
   const fy            = getCurrentFY();
+  const defaultStart  = `${fy - 2}-10`;
   const nextFyEnd     = `${fy + 1}-09`;
   const dataEnd       = validExisting.length ? validExisting[validExisting.length - 1] : '';
   const defaultEnd    = maxMonth(nextFyEnd, dataEnd || nextFyEnd);
-  const start         = validExisting.length ? minMonth(defaultStart, validExisting[0]) : defaultStart;
   const months        = [];
-  let d               = monthToDate(start);
+  let d               = monthToDate(defaultStart);
   const endDate       = monthToDate(defaultEnd);
   while (d <= endDate) {
     months.push(d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'));
@@ -386,7 +397,6 @@ function monthToDate(month) {
   const [year, monthNo] = month.split('-').map(Number);
   return new Date(year, monthNo - 1, 1);
 }
-function minMonth(a, b) { return a <= b ? a : b; }
 function maxMonth(a, b) { return a >= b ? a : b; }
 
 // ── CALCULATIONS ──────────────────────────────────────────────────────────────
