@@ -111,22 +111,38 @@ button, input, select { font: inherit; }
 }
 
 .sidebar-header {
-  padding: 22px 16px 18px;
+  padding: 16px; /* Adjusted padding for logo */
   border-bottom: 1px solid rgba(255,255,255,0.07);
+  display: flex;
+  flex-direction: column;
+  gap: 8px; /* Gap between logo and subtitle */
 }
+
+/* Container for the logo image */
 .sidebar-logo {
-  font-size: 10px;
-  font-weight: 800;
-  letter-spacing: 0.12em;
-  color: var(--blue-mid);
-  text-transform: uppercase;
-  margin-bottom: 3px;
+  display: block;
+  width: 100%;
+  /* Optional: filter to make black text readable on dark background if needed,
+     but image_1.png has black text and a dark underline, which might look poor.
+     Assuming a bright logo on dark sidebar is desired. */
 }
+
+/* Ensure the image scales correctly within the sidebar */
+.logo-image {
+  max-width: 180px; /* Constraints the width */
+  height: auto;     /* Maintains aspect ratio */
+  display: block;
+}
+
 .sidebar-title {
-  font-size: 15px;
-  font-weight: 600;
-  color: #fff;
+  font-family: 'Arial Black', 'Franklin Gothic Heavy', 'Impact', sans-serif;
+  font-size: 13px;
+  font-weight: 900;
+  font-style: italic;
+  color: rgba(255,255,255,0.85);
   line-height: 1.3;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
 }
 
 .sidebar-nav { padding: 10px 8px; flex: 1; }

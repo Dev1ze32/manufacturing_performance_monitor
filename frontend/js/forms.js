@@ -197,6 +197,7 @@ function renderEntryCapacity(c) {
             <div class="form-group">
               <label>Machine Availability (%)</label>
               <input type="number" id="c_avail" placeholder="e.g. 95" step="0.01">
+              <span class="form-hint">Optional. Leave blank if machine availability is not tracked for this record.</span>
             </div>
           </div>
           <div id="c_preview" style="margin-top:12px;font-size:13px;color:var(--gray-500)"></div>
@@ -271,6 +272,7 @@ function renderEntryCapacity(c) {
             <div class="form-group">
               <label>Machine Availability (%)</label>
               <input type="number" id="cw_avail" placeholder="e.g. 95" step="0.01">
+              <span class="form-hint">Optional. Leave blank if machine availability is not tracked for this week.</span>
             </div>
           </div>
           <div id="cw_preview" style="margin-top:12px;font-size:13px;color:var(--gray-500)"></div>
